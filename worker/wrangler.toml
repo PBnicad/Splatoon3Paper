@@ -1,0 +1,16 @@
+# Cloudflare Worker — M5Paper Splatoon3 日程反代
+# 部署：cd worker && npx wrangler deploy
+# 自定义域：要求 splatoon.icu 已托管在同一 Cloudflare 账号；
+# 下方 routes 会在部署时自动创建 api.splatoon.icu 的自定义域与 DNS 记录。
+# 首次部署若尚未接入域名，先注释掉 routes，之后再加回重新 deploy。
+
+name = "splatoon3-m5paper"
+main = "src/index.js"
+compatibility_date = "2026-08-01"
+
+routes = [
+  { pattern = "api.splatoon.icu", custom_domain = true }
+]
+
+[observability]
+enabled = true
