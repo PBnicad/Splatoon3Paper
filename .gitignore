@@ -2,3 +2,8 @@
 .vscode/
 .idea/
 .mimosa/
+.tmp/
+node_modules/
+tools/fonts/*
+!tools/fonts/.gitkeep
+.zcode/

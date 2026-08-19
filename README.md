@@ -1,58 +1,89 @@
-# M5Paper v1.1 · PlatformIO 工程
+# M5Paper · 斯普拉遁3 日程墨水屏
 
-基于官方 M5Stack 库的 [M5Paper](https://docs.m5stack.com/en/core/M5Paper) v1.1 开发工程。
+把 [splatoon3.ink](https://splatoon3.ink) 的日程功能移植到 M5Paper v1.1
+（540×960 墨水屏、16 级灰度、GT911 触摸）的独立固件。显示对战日程、
+鲑鱼跑（含大型跑/团队打工竞赛）、活动比赛、祭典与鱿鱼商店，全部中文化。
 
-## 硬件
-
-| 项目 | 规格 |
-|---|---|
-| SoC | ESP32-D0WDQ6-V3 @ 240MHz |
-| Flash | 16MB（`default_16MB.csv` 分区表） |
-| PSRAM | 8MB Quad-SPI（`-DBOARD_HAS_PSRAM`） |
-| 屏幕 | 4.7" 540×960 墨水屏（IT8951），16 级灰度 |
-| 触摸 | GT911 电容触摸 |
-| 其他 | SHT30 温湿度、BM8563 RTC、FM24C02 EEPROM、1150mAh 电池 |
-
-## 库选型说明（为什么不是 M5EPD）
-
-M5Paper 老的专用库 [M5EPD](https://github.com/m5stack/M5EPD) 已于 2025-07 归档，
-仓库首页明确标注 **Deprecated — Use M5GFX & M5Unified**。
-本工程采用官方现行推荐组合：
-
-- [M5Unified](https://github.com/m5stack/M5Unified) —— 系统 / 按键 / 触摸 / 电源 / RTC
-- [M5GFX](https://github.com/m5stack/M5GFX) —— 显示驱动（内置 IT8951 墨水屏 + GT911 触摸支持，
-  自动识别 `board_M5Paper`）
-
-PlatformIO 官方 espressif32 平台没有 M5Paper 专用板型，因此以 `esp32dev` 为基础，
-在 `platformio.ini` 中覆写为 16MB Flash + 8MB QSPI PSRAM 的真实硬件参数。
-
-## 常用命令
-
-```bash
-pio run                    # 编译
-pio run -t upload          # 编译并烧录
-pio device monitor         # 串口监视（115200）
-pio run -t upload -t monitor # 烧录后直接进监视
+```
+M5Paper ──HTTPS──> Cloudflare Worker (api.splatoon.icu) ──HTTPS──> splatoon3.ink/data/*
+                        │
+                        ├─ /api/v1/compact   设备专用精简视图（~7KB，全中文）
+                        └─ /data/*           纯透传反代 + 边缘缓存 + 故障影子缓存
 ```
 
-`src/main.cpp` 移植自官方示例，包含三键（BtnA/B/C）与触摸的基础演示：
+- **数据**：splatoon3.ink 公开数据（[Data Access wiki](https://github.com/misenhower/splatoon3.ink/wiki/Data-Access)）。
+  注意数据**不在 GitHub 仓库里**（仓库无 data/ 目录），上游实际是 splatoon3.ink 自身的 S3+Cloudflare，
+  因此 Worker 直接代理 splatoon3.ink。
+- **逻辑**：按 misenhower/splatoon3.ink（MIT）前端 store 逻辑在 Worker 端复刻
+  （当前/未来时段判定、蛮颓系列/开放拆分、活动 timePeriods 聚合、打工合并排序、
+  祭典 dedupe 与近期结果窗口），见 `worker/src/compact.js` 与 `worker/API.md`。
+- **中文**：名称取自官方 `locale/zh-CN.json`（按 id 映射，英文兜底）；
+  界面文案取自站点 zh-CN i18n；字库由 `tools/make_font.py` 离线生成（Noto Sans SC，
+  1248 字符 4bpp 灰度点阵，刷入 LittleFS）。
 
-- [examples/Basic/Button/Button.ino](https://github.com/m5stack/M5Unified/blob/master/examples/Basic/Button/Button.ino)
-- [examples/Basic/Touch/DragDrop/DragDrop.ino](https://github.com/m5stack/M5Unified/blob/master/examples/Basic/Touch/DragDrop/DragDrop.ino)
+## 页面（触摸左右 1/6 翻页，底部圆点跳页）
 
-更多官方示例见本地 `.pio/libdeps/m5paper/M5Unified/examples/`（HowToUse、Rtc、Imu 等）。
+| 页 | 内容 |
+|---|---|
+| 1 总览 | 时钟/电量/WiFi/更新状态；四个模式当前时段卡（祭典期间按站点逻辑替换为祭典常规/挑战）；活动/祭典横幅；鲑鱼跑当前班次 |
+| 2 时段 | 按模式分页签的未来 12 槽列表（每 2 小时一档，约 24 小时） |
+| 3 鲑鱼跑 | 当前班次（地图/王鲑/4 武器/倒计时）、未来班次、大型跑 ▲ 标记、团队打工竞赛 |
+| 4 活动/祭典 | 活动比赛详情（描述/规则/各场次）；祭典状态或下次祭典、三色占地、近期结算（得票率/获胜队） |
+| 5 商店 | 鱿鱼限时装备（价格/下架时间/主能力）、打工月度奖励装备 |
 
-## 烧录注意事项
+其他交互：点头部时钟区立即刷新；点右下角署名区息屏（触摸唤醒）。
+每分钟局部刷新头部（时钟+换挡倒计时）；每 10 次快速刷新自动做一次全刷去残影。
 
-- 串口芯片有 CP2104 和 CH9102 两种批次，驱动装不上时按
-  [官方文档](https://docs.m5stack.com/en/core/M5Paper) 安装 CP210X / CP34X 驱动。
-- 烧录失败（超时 / Failed to write to target RAM）：按住 G0 再按 RESET 进入下载模式后重试。
-- 墨水屏刷新慢是正常的；对画质有要求时把 `setEpdMode(epd_mode_t::epd_fastest)`
-  换成 `epd_quality`。
+## 目录结构
 
-## 常用外设提示
+```
+worker/        Cloudflare Worker（wrangler）；npm test 跑 fixture 单测
+tools/         make_font.py（字库）、fetch_fixtures.mjs、extract_ui_strings.py
+data/          LittleFS 内容（font24/40/96.bin）→ pio run -t uploadfs
+src/           固件（M5Unified + M5GFX + ArduinoJson v7）
+docs/deploy.md 部署手册（Worker + 设备）
+```
 
-- RTC（BM8563）：`M5.Rtc`，官方示例 `examples/Basic/Rtc`
-- 电池/睡眠：`M5.Power`（电量、`deepSleep()` 等，见官方 HowToUse 示例）
-- SHT30 温湿度：M5Unified 不含此传感器，可另装官方 Unit 库
-  `m5stack/Unit-SENSOR` 或 `adafruit/Adafruit SHT31 Sensor`
+## 构建 / 烧录
+
+```bash
+pio run                    # 编译固件
+pio run -t upload          # 烧录固件（需 USB 连接，失败时按住侧面键+RESET 进下载模式）
+pio run -t uploadfs        # 刷入字库（LittleFS）
+pio device monitor         # 串口 115200
+```
+
+首次配网（串口命令，保存到 NVS 后自动重启）：
+
+```
+wifi 你的SSID 你的密码
+```
+
+其他串口命令：`refetch`（强制刷新）、`page N`、`sleep`（息屏）、`status`。
+
+字库更新流程：改了固件里的 UI 文案后：
+
+```bash
+python tools/extract_ui_strings.py   # 收集 src/ 中文文案进 tools/ui-strings.txt
+python tools/make_font.py            # 重新生成 data/font*.bin（字符集含 zh-CN locale 全部名称）
+pio run -t uploadfs
+```
+
+## 部署
+
+见 `docs/deploy.md`（需要拥有 splatoon.icu 并托管在 Cloudflare，Worker 绑定自定义域
+`api.splatoon.icu`；workers.dev 默认域在国内基本不可达）。
+
+## 取数礼仪 / 署名
+
+- 设备与 Worker 对 splatoon3.ink 的请求 ≤1 次/小时（数据本身每小时才更新），
+  Worker 边缘缓存 10 分钟，自定义 User-Agent 标明来源。
+- 屏幕页脚与 API 响应均标注 `data: splatoon3.ink`。
+- 站点要求使用其数据的衍生品保持免费；逻辑复刻自 MIT 许可的官方前端仓库。
+
+## 硬件 / 环境
+
+M5Paper v1.1：ESP32-D0WDQ6-V3 @240MHz、16MB Flash（自定义分区：4MB app + 12MB FS）、
+8MB PSRAM（画布与 JSON 缓冲）、BM8563 RTC（断网授时兜底）、GT911 触摸（G36 可深睡唤醒）。
+PlatformIO `espressif32` + Arduino core 2.0.17；TLS 钉扎 GTS Root R4 与 ISRG Root X1
+双根证书轮试（Cloudflare 轮换签发 CA 时自动切换，均失败则更新 `src/certs.h`）。
