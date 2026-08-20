@@ -4,6 +4,10 @@
 （540×960 墨水屏、16 级灰度、GT911 触摸）的独立固件。显示对战日程、
 鲑鱼跑（含大型跑/团队打工竞赛）、活动比赛、祭典与鱿鱼商店，全部中文化。
 
+<p align="center">
+  <img src="tools/preview/live-p0.png" width="270" alt="涂地页实机画面">
+</p>
+
 ```
 M5Paper ──HTTPS──> Cloudflare Worker (api.splatoon.icu) ──HTTPS──> splatoon3.ink/data/*
                         │
