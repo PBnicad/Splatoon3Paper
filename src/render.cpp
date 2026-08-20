@@ -25,11 +25,10 @@ enum : uint8_t {
   C_WHITE = 15,
 };
 
-// SNF1 CJK ink extends below the em box (font24 max yoff+h = 30, font40 = 46).
-constexpr int kInk24 = 30;
-constexpr int kInk40 = 46;
-constexpr int kLine24 = kInk24 + 6;  // 36: line box + gap so descenders never collide
-constexpr int kTeamRow = kInk24 + 14;
+// SNF1 ink box (max yoff+h). Latin descenders on font24 reach 35, font40 58.
+constexpr int kInk24 = 36;
+constexpr int kInk40 = 58;
+constexpr int kLine24 = kInk24 + 6;
 
 static void pushFull(bool quality) {
   // Page turns and data redraws use GC16 full-frame refresh to clear ghosts.
@@ -51,6 +50,8 @@ bool begin() {
   }
   page.setColorDepth(4);
   header.setColorDepth(4);
+  page.setPsram(true);
+  header.setPsram(true);
   bool ok = page.createSprite(kW, kH) != nullptr;
   header.createSprite(kW, kHeaderH);
   return ok;
@@ -190,7 +191,7 @@ static void drawPageTitle(const char* t) {
   page.drawFastHLine(0, kTitleLine, kW, C_MID);
 }
 
-static void drawFestTeams(int y, const Team* teams, int n);
+static int drawFestTeams(int y, const Team* teams, int n);
 
 static const char* weaponShown(const Shift& s, int i) {
   if (s.mys && strcmp(s.w[i], "随机") == 0)
@@ -267,7 +268,7 @@ static void drawFooter(const Model& m, int pageId) {
     int x = i * tw;
     int lw = font24.textWidth(names[i]);
     int tx = x + (tw - lw) / 2;
-    int ty = y + 8;  // raised; bar stays at the bottom. ink 30 → y+38 in 56px
+    int ty = y + 8;  // raised; bar stays at the bottom
     if (ids[i] == pageId) {
       page.fillRect(x + 8, y + 3, tw - 16, 4, C_WHITE);
       font24.draw(&page, tx, ty, names[i], C_WHITE, C_BLACK);
@@ -383,8 +384,7 @@ static void drawFestPage(const Model& m) {
   if (m.fest.present) {
     font24.drawEllipsis(&page, 24, y, m.fest.title, C_DARK, C_WHITE, kW - 48);
     y += kInk24 + 8;
-    drawFestTeams(y, m.fest.teams, m.fest.nTeams);
-    y += m.fest.nTeams * kTeamRow + 10;
+    y = drawFestTeams(y, m.fest.teams, m.fest.nTeams) + 10;
   }
   font24.draw(&page, 24, y, ui::ModeFestOpen, C_GRAY, C_WHITE);
   int listY = y + kSecH;
@@ -445,7 +445,11 @@ static void drawAboutPage(const Model& m) {
   font24.draw(&page, 24, y, ui::AboutGithub, C_GRAY, C_WHITE);
   y += kLine24;
   font24.draw(&page, 24, y, ui::GithubUrl, C_BLACK, C_WHITE);
-  y += 64;
+  y += kInk24 + 16;
+  constexpr int qrW = 280;
+  int qrX = (kW - qrW) / 2;
+  page.qrcode(ui::GithubUrlHttps, qrX, y, qrW, 1, true);
+  y += qrW + 20;
   font24.draw(&page, 24, y, ui::TapBack, C_MID, C_WHITE);
   drawFooter(m, kPageSettings);
 }
@@ -601,21 +605,34 @@ static int drawEventCard(int y, const EventItem& e) {
   return y + np * kLine24 + 14;
 }
 
-static void drawFestTeams(int y, const Team* teams, int n) {
+static int drawFestTeams(int y, const Team* teams, int n) {
+  if (n <= 0) return y;
+  if (n > 3) n = 3;
+  const int x0 = 12;
+  const int colW = (kW - 24) / n;
+  const int chip = 24;
+  bool anyVr = false;
+  for (int i = 0; i < n; ++i)
+    if (teams[i].hasVr) anyVr = true;
   for (int i = 0; i < n; ++i) {
     const Team& t = teams[i];
+    int x = x0 + i * colW;
     uint8_t lum = (t.r * 30 + t.g * 59 + t.b * 11) / 100;
-    uint8_t gray = (uint8_t)(15 - lum * 15 / 255);  // dark color → dark gray
-    int ty = y + i * kTeamRow;
-    page.fillRoundRect(24, ty, 40, kInk24, 4, gray);
-    font24.drawEllipsis(&page, 80, ty + 2, t.n, C_BLACK, C_WHITE, 200);
-    if (t.win) font24.draw(&page, 300, ty + 2, ui::Won, C_BLACK, C_WHITE);
+    uint8_t gray = (uint8_t)(15 - lum * 15 / 255);
+    int cy = y + (kInk24 - chip) / 2;
+    page.fillRoundRect(x + 4, cy, chip, chip, 4, gray);
+    if (t.win) page.drawRoundRect(x + 4, cy, chip, chip, 4, C_BLACK);
+    int nx = x + 4 + chip + 6;
+    int nw = colW - (chip + 16);
+    if (nw < 24) nw = 24;
+    font24.drawEllipsis(&page, nx, y, t.n, C_BLACK, C_WHITE, nw);
     if (t.hasVr) {
-      char vr[32];
-      snprintf(vr, sizeof(vr), "%s %.1f%%", ui::Votes, t.vr / 100.0);
-      font24.draw(&page, kW - 24 - font24.textWidth(vr), ty + 2, vr, C_GRAY, C_WHITE);
+      char vr[24];
+      snprintf(vr, sizeof(vr), "%.1f%%", t.vr / 100.0);
+      font24.drawEllipsis(&page, nx, y + kLine24, vr, C_GRAY, C_WHITE, nw);
     }
   }
+  return y + kInk24 + (anyVr ? kLine24 : 0) + 8;
 }
 
 static void drawP4(const Model& m) {
@@ -674,8 +691,7 @@ static void drawP4(const Model& m) {
       font24.draw(&page, 24, y, tbuf, C_MID, C_WHITE);
       y += kLine24;
     }
-    drawFestTeams(y, f.teams, f.nTeams);
-    y += f.nTeams * kTeamRow + 8;
+    y = drawFestTeams(y, f.teams, f.nTeams) + 8;
     if (f.nTri > 0) {
       char tri[96];
       snprintf(tri, sizeof(tri), "%s: %s", ui::Tricolor, f.tri[0]);
@@ -694,13 +710,12 @@ static void drawP4(const Model& m) {
     snprintf(tbuf, sizeof(tbuf), "%s ~ %s", a, b);
     font24.draw(&page, 24, y, tbuf, C_MID, C_WHITE);
     y += kLine24;
-    drawFestTeams(y, f.teams, f.nTeams);
-    y += f.nTeams * kTeamRow;
+    y = drawFestTeams(y, f.teams, f.nTeams);
   } else {
     drawText(24, y, "祭典 · 暂无", C_MID, C_WHITE);
   }
 
-  if (m.nFestRecent > 0 && y + 40 + kTeamRow <= kH - kFooterH) {
+  if (m.nFestRecent > 0 && y + 40 + kInk24 + kLine24 <= kH - kFooterH) {
     const FestHist& f = m.festRecent[0];
     y += 12;
     page.drawFastHLine(12, y, kW - 24, C_LIGHT);

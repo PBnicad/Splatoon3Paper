@@ -14,3 +14,11 @@ void Config::setWifi(const char* ssid, const char* pass) {
   prefs_.putString("ssid", ssid_);
   prefs_.putString("pass", pass_);
 }
+
+void Config::factoryReset() {
+  ssid_[0] = 0;
+  pass_[0] = 0;
+  autoFetch_ = true;
+  onboarded_ = false;
+  prefs_.clear();
+}

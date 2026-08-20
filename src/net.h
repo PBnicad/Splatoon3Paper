@@ -5,6 +5,7 @@
 #include <WiFiClientSecure.h>
 #include <WString.h>
 
+void netInit();  // PSRAM TLS allocators; call once after M5.begin()
 bool wifiConnect(const char* ssid, const char* pass, uint32_t timeoutMs);
 bool wifiConnected();
 void wifiKeepAlive();

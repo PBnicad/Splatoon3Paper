@@ -80,3 +80,20 @@ bool cacheLoadMeta(uint32_t& fetchedAt, String& etag) {
   }
   return fetchedAt > 0;
 }
+
+void cacheClearUserData() {
+  FsHold hold;
+  LittleFS.remove(kCompactPath);
+  LittleFS.remove(kMetaPath);
+  File dir = LittleFS.open("/img");
+  if (!dir || !dir.isDirectory()) return;
+  for (;;) {
+    File f = dir.openNextFile();
+    if (!f) break;
+    String p = f.name();
+    f.close();
+    if (!p.startsWith("/")) p = String("/img/") + p;
+    LittleFS.remove(p);
+    dir.rewindDirectory();
+  }
+}

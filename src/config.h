@@ -36,6 +36,7 @@ constexpr const char* AboutTitle = "关于";
 constexpr const char* AboutHint = "项目介绍与开源地址";
 constexpr const char* AboutGithub = "开源地址";
 constexpr const char* GithubUrl = "github.com/PBnicad/Splatoon3Paper";
+constexpr const char* GithubUrlHttps = "https://github.com/PBnicad/Splatoon3Paper";
 constexpr const char* TapBack = "点此返回";
 constexpr const char* CurrentNetwork = "当前网络";
 constexpr const char* NoWifi = "未配网";
@@ -100,6 +101,7 @@ class Config {
   const char* ssid() const { return ssid_; }
   const char* password() const { return pass_; }
   void setWifi(const char* ssid, const char* pass);
+  void factoryReset();  // wipe NVS wifi + onboarded
   bool autoFetch() const { return autoFetch_; }
   void setAutoFetch(bool on) {
     autoFetch_ = on;

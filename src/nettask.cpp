@@ -98,13 +98,21 @@ static bool fetchCompact() {
   }
   if (code != 200 || body.length() < 16) return false;
 
-  static Model incoming;
-  if (!modelParse(incoming, body.c_str(), body.length())) return false;
+  static Model* incoming = nullptr;
+  if (!incoming) {
+    incoming = (Model*)ps_malloc(sizeof(Model));
+    if (!incoming) incoming = (Model*)malloc(sizeof(Model));
+    if (!incoming) {
+      Serial.println("[nettask] no mem for model");
+      return false;
+    }
+  }
+  if (!modelParse(*incoming, body.c_str(), body.length())) return false;
   cacheSaveCompact(body.c_str(), body.length(), newEtag.c_str());
 
   {
     StateHold hold;
-    *sModel = incoming;
+    *sModel = *incoming;
     *sHasModel = true;
     *sEtag = newEtag;
     sSt->offline = false;

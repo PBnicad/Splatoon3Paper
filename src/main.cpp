@@ -9,12 +9,14 @@
 #include <Arduino.h>
 #include <LittleFS.h>
 #include <M5Unified.h>
+#include <WiFi.h>
 #include <time.h>
 
 #include "cache.h"
 #include "config.h"
 #include "font.h"
 #include "model.h"
+#include "net.h"
 #include "nettask.h"
 #include "power.h"
 #include "render.h"
@@ -196,6 +198,15 @@ static void handleSerial() {
         wifiuiRun(cfg, true);
         netPause(false);
         paint();
+      } else if (line == "factoryreset") {
+        netPause(true);
+        WiFi.disconnect(true, true);
+        WiFi.mode(WIFI_OFF);
+        cacheClearUserData();
+        cfg.factoryReset();
+        Serial.println("[app] factory reset, rebooting");
+        delay(400);
+        ESP.restart();
       } else if (line == "status") {
         StateHold hold;
         Serial.printf("page=%d wifi=%d offline=%d hasModel=%d gen=%lu nf=%lu modes=%d events=%d shifts=%d egg=%d gear=%d\n",
@@ -204,7 +215,7 @@ static void handleSerial() {
                       model.nModes, model.nEvents, model.nShifts,
                       model.nEggstra, model.nGear);
       } else {
-        Serial.println("cmds: wifi SSID PASS | refetch | page N | sleep | sleepview | status | autofetch 0/1 | shot | dumpcache");
+        Serial.println("cmds: wifi SSID PASS | refetch | page N | sleep | sleepview | status | autofetch 0/1 | shot | dumpcache | factoryreset");
       }
       line = "";
     } else if (line.length() < 128) {
@@ -221,10 +232,13 @@ void setup() {
   M5.begin(m5cfg);
   M5.Power.begin();
   Serial.println("\n[app] splatoon3 m5paper boot");
-  Serial.printf("[app] heap=%u free, psram=%u free, loopstack-hwm=%u model=%u\n",
-                ESP.getFreeHeap(), (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+  Serial.printf("[app] heap=%u intern=%u psram=%u loopstack-hwm=%u model=%u\n",
+                ESP.getFreeHeap(),
+                (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
                 (unsigned)uxTaskGetStackHighWaterMark(NULL), (unsigned)sizeof(Model));
 
+  netInit();
   if (!cacheBegin()) Serial.println("[app] WARN littlefs mount failed");
   fontSetup();
   cfg.begin();

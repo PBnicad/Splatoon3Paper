@@ -54,6 +54,7 @@ void powerEnterSleep() {
   M5.Display.setEpdMode(epd_mode_t::epd_quality);
   M5Canvas c(&M5.Display);
   c.setColorDepth(4);
+  c.setPsram(true);
   c.createSprite(M5.Display.width(), M5.Display.height());
   c.fillSprite(15);
   extern bool powerDrawSleepHint(M5Canvas& c);

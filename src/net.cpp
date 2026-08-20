@@ -4,6 +4,8 @@
 #include <HTTPClient.h>
 #include <LittleFS.h>
 #include <WiFi.h>
+#include <esp_heap_caps.h>
+#include <mbedtls/platform.h>
 #include <mbedtls/ssl.h>
 #include "ssl_client.h"
 
@@ -12,6 +14,18 @@
 
 #include "cache.h"
 #include "certs.h"
+
+// Handshake wants two 16KB record buffers. Internal DRAM is too tight once
+// Wi-Fi + the net task are up, so mbedtls allocs go to PSRAM first.
+static void* tlsCalloc(size_t n, size_t sz) {
+  void* p = heap_caps_calloc(n, sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (!p) p = heap_caps_calloc(n, sz, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  return p;
+}
+
+void netInit() {
+  mbedtls_platform_set_calloc_free(tlsCalloc, heap_caps_free);
+}
 
 // Arduino-ESP32 2.x WiFiClientSecure::read() returns -1 when available()==0,
 // and available() only counts already-decrypted bytes. Cloudflare sends ~8KB
@@ -114,7 +128,9 @@ static bool readHttpBody(HTTPClient& http, String& body, uint32_t timeoutMs) {
 int httpsGet(const char* host, const char* path, const char* etagIn,
              String& body, String& etagOut) {
   String url = String("https://") + host + path;
-  Serial.printf("[net] httpsGet %s heap=%u\n", path, ESP.getFreeHeap());
+  Serial.printf("[net] httpsGet %s heap=%u intern=%u psram=%u\n", path, ESP.getFreeHeap(),
+                (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
   for (int attempt = 0; attempt < 3; ++attempt) {
     if (attempt) delay(400);
     TlsClient client;

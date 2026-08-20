@@ -94,17 +94,21 @@ def rasterize(font: ImageFont.FreeTypeFont, ch: str):
     except Exception:
         return None
     adv = max(1, int(round(length)))
-    px = font.size
-    canvas = Image.new("L", (max(adv, 8) + 8, px + 8), 0)
-    ImageDraw.Draw(canvas).text((2, 2), ch, font=font, fill=255, anchor="la")
+    ascent, descent = font.getmetrics()
+    pad = 6
+    ox, oy = pad + 8, pad  # extra left pad for negative bearings (j, etc.)
+    cw = max(adv, 8) + ox + pad + 8
+    canvas_h = oy + ascent + descent + pad
+    canvas = Image.new("L", (cw, canvas_h), 0)
+    ImageDraw.Draw(canvas).text((ox, oy), ch, font=font, fill=255, anchor="la")
     bbox = canvas.getbbox()
     if not bbox:
         return (0, 0, 0, 0, adv, b"")
     l, t, r, b = bbox
     cropped = canvas.crop((l, t, r, b))
     w, h = cropped.size
-    xoff = l - 2
-    yoff = t - 2
+    xoff = l - ox
+    yoff = t - oy
     pixels = list(cropped.getdata())
     packed = bytearray()
     for i in range(0, len(pixels), 2):

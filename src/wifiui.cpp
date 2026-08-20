@@ -14,6 +14,9 @@ namespace {
 
 enum { C_BLACK = 0, C_DARK = 3, C_GRAY = 6, C_MID = 9, C_LIGHT = 12, C_WHITE = 15 };
 constexpr int kW = 540, kH = 960;
+constexpr int kInk24 = 36;
+constexpr int kInk40 = 58;
+constexpr int kListY = 184;
 
 const char* kRows[4] = {
     "1234567890",
@@ -82,15 +85,15 @@ void drawKb(M5Canvas& c, int y0) {
 void drawWelcome(M5Canvas& c) {
   c.fillSprite(C_WHITE);
   font40.draw(&c, 36, 88, ui::WelcomeHi, C_BLACK, C_WHITE);
-  font40.draw(&c, 36, 160, ui::AppTitle, C_BLACK, C_WHITE);
-  c.drawFastHLine(36, 230, kW - 72, C_LIGHT);
+  font40.draw(&c, 36, 88 + kInk40 + 16, ui::AppTitle, C_BLACK, C_WHITE);
+  c.drawFastHLine(36, 88 + 2 * (kInk40 + 16), kW - 72, C_LIGHT);
   font24.draw(&c, 36, 260, ui::WelcomeBody1, C_DARK, C_WHITE);
-  font24.draw(&c, 36, 304, ui::WelcomeBody2, C_DARK, C_WHITE);
-  font24.draw(&c, 36, 348, ui::WelcomeBody3, C_DARK, C_WHITE);
+  font24.draw(&c, 36, 260 + kInk24 + 12, ui::WelcomeBody2, C_DARK, C_WHITE);
+  font24.draw(&c, 36, 260 + 2 * (kInk24 + 12), ui::WelcomeBody3, C_DARK, C_WHITE);
 
-  c.fillRoundRect(36, 672, kW - 72, 96, 8, C_BLACK);
+  c.fillRoundRect(36, 668, kW - 72, 104, 8, C_BLACK);
   int tw = font40.textWidth(ui::StartWifi);
-  font40.draw(&c, (kW - tw) / 2, 672 + 25, ui::StartWifi, C_WHITE, C_BLACK);
+  font40.draw(&c, (kW - tw) / 2, 668 + (104 - kInk40) / 2, ui::StartWifi, C_WHITE, C_BLACK);
 
   int lw = font24.textWidth(ui::Later);
   font24.draw(&c, (kW - lw) / 2, 800, ui::Later, C_MID, C_WHITE);
@@ -110,9 +113,9 @@ void drawList(M5Canvas& c) {
   font24.draw(&c, kW - 24 - font24.textWidth(ui::Refresh), 18, ui::Refresh, C_DARK,
               C_WHITE);
   font40.draw(&c, 24, 64, ui::PickWifi, C_BLACK, C_WHITE);
-  font24.draw(&c, 24, 64 + 46 + 12, "点选网络，下一步输入密码", C_GRAY, C_WHITE);
+  font24.draw(&c, 24, 64 + kInk40 + 12, "点选网络，下一步输入密码", C_GRAY, C_WHITE);
 
-  int y = 168;
+  int y = kListY;
   for (int i = 0; i < gN && i < 10; i++) {
     if (i == gSel) c.fillRoundRect(16, y, kW - 32, 64, 6, C_LIGHT);
     else c.drawRoundRect(16, y, kW - 32, 64, 6, C_LIGHT);
@@ -133,9 +136,10 @@ void drawPass(M5Canvas& c) {
   font24.draw(&c, 24, 16, ui::Back, C_DARK, C_WHITE);
   font40.drawEllipsis(&c, 24, 56, gSel >= 0 ? gNets[gSel].ssid : "", C_BLACK, C_WHITE,
                       kW - 48);
-  c.drawRoundRect(16, 118, kW - 32, 56, 4, C_MID);
-  if (gPassLen == 0) font24.draw(&c, 32, 131, ui::EnterPass, C_MID, C_WHITE);
-  else font24.drawEllipsis(&c, 32, 131, gPass, C_BLACK, C_WHITE, kW - 80);
+  int boxY = 56 + kInk40 + 12;
+  c.drawRoundRect(16, boxY, kW - 32, 56, 4, C_MID);
+  if (gPassLen == 0) font24.draw(&c, 32, boxY + 13, ui::EnterPass, C_MID, C_WHITE);
+  else font24.drawEllipsis(&c, 32, boxY + 13, gPass, C_BLACK, C_WHITE, kW - 80);
   drawKb(c, 188);
   fullPush(c);
 }
@@ -143,9 +147,10 @@ void drawPass(M5Canvas& c) {
 void drawFail(M5Canvas& c) {
   c.fillSprite(C_WHITE);
   font40.draw(&c, 36, 200, ui::ConnectFail, C_BLACK, C_WHITE);
-  font24.draw(&c, 36, 200 + 46 + 16, ui::CheckPass, C_DARK, C_WHITE);
+  font24.draw(&c, 36, 200 + kInk40 + 16, ui::CheckPass, C_DARK, C_WHITE);
   if (gSel >= 0)
-    font24.drawEllipsis(&c, 36, 316, gNets[gSel].ssid, C_GRAY, C_WHITE, kW - 72);
+    font24.drawEllipsis(&c, 36, 200 + kInk40 + 16 + kInk24 + 10, gNets[gSel].ssid, C_GRAY,
+                        C_WHITE, kW - 72);
 
   c.fillRoundRect(36, 500, kW - 72, 80, 8, C_BLACK);
   int tw = font24.textWidth(ui::RetryPass);
@@ -233,7 +238,7 @@ bool tryConnect(M5Canvas& c, Config& cfg) {
   cfg.setWifi(gNets[gSel].ssid, pass);
   c.fillSprite(C_WHITE);
   font40.draw(&c, 36, 360, ui::Connecting, C_BLACK, C_WHITE);
-  font24.drawEllipsis(&c, 36, 360 + 46 + 16, gNets[gSel].ssid, C_DARK, C_WHITE, kW - 72);
+  font24.drawEllipsis(&c, 36, 360 + kInk40 + 16, gNets[gSel].ssid, C_DARK, C_WHITE, kW - 72);
   fullPush(c);
   WiFi.disconnect(false, false);
   delay(200);
@@ -299,8 +304,8 @@ bool wifiuiRun(Config& cfg, bool firstBoot) {
         drawList(c);
         continue;
       }
-      if (y >= 168) {
-        int idx = (y - 168) / 70;
+      if (y >= kListY) {
+        int idx = (y - kListY) / 70;
         if (idx >= 0 && idx < gN && idx < 10) {
           gSel = idx;
           gPass[0] = 0;
