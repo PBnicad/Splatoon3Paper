@@ -25,11 +25,16 @@ class FontFace {
                    uint8_t fg, uint8_t bg, int maxWidth) const;
 
  private:
+  // SNF1 glyph: u8 w,h | i8 xoff,yoff | u8 adv,flags | u8 r0,r1  then 4bpp bitmap.
+  // The two reserved bytes are part of the on-disk header (see tools/make_font.py);
+  // treating the struct as 6 bytes shifts every glyph's bitmap and garbles text.
   struct GlyphHead {
     uint8_t w, h;
     int8_t xoff, yoff;
     uint8_t adv, flags;
-  };
+    uint8_t r0, r1;
+  } __attribute__((packed));
+  static_assert(sizeof(GlyphHead) == 8, "SNF1 glyph header is 8 bytes");
   const GlyphHead* find(uint32_t cp) const;
 
   uint8_t* buf_ = nullptr;   // PSRAM

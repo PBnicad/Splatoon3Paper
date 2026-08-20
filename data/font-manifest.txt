@@ -1,5 +1,5 @@
-source: D:\personal\M5Paper\data\fonts\NotoSansSC-Regular.otf
-charset: 1248
-font24.bin: 354745 bytes
-font40.bin: 915344 bytes
-font96.bin: 30937 bytes
+source: D:\personal\M5Paper\tools\fonts\NotoSansSC-Regular.otf
+charset: 1279
+font24.bin: 331407 bytes
+font40.bin: 738671 bytes
+font96.bin: 21226 bytes

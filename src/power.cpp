@@ -3,6 +3,9 @@
 #include <Arduino.h>
 #include <M5Unified.h>
 
+#include "img.h"
+#include "net.h"
+
 int powerBatteryPercent() {
   int level = M5.Power.getBatteryLevel();
   if (level >= 0 && level <= 100) return level;
@@ -15,13 +18,13 @@ int powerBatteryPercent() {
 }
 
 void powerEnterTouchSleep() {
+  if (wifiConnected()) imgPrefetchKey(kBuddyKey);
   M5.Display.setEpdMode(epd_mode_t::epd_quality);
   M5Canvas c(&M5.Display);
   c.setColorDepth(4);
   c.createSprite(M5.Display.width(), M5.Display.height());
   c.fillSprite(0);
-  c.setTextColor(15, 0);
-  extern bool powerDrawSleepHint(M5Canvas& c);  // provided by render
+  extern bool powerDrawSleepHint(M5Canvas& c);
   powerDrawSleepHint(c);
   c.pushSprite(0, 0);
   delay(600);  // let the panel settle

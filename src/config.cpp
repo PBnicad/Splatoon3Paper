@@ -4,6 +4,8 @@ void Config::begin() {
   prefs_.begin("splatoon", false);
   prefs_.getString("ssid", ssid_, sizeof(ssid_));
   prefs_.getString("pass", pass_, sizeof(pass_));
+  autoFetch_ = prefs_.getBool("autofetch", true);
+  onboarded_ = prefs_.getBool("onboarded", false);
 }
 
 void Config::setWifi(const char* ssid, const char* pass) {

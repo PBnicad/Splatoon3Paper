@@ -8,10 +8,14 @@ static const char* kCompactPath = "/compact.json";
 static const char* kMetaPath = "/meta.json";
 
 bool cacheBegin() {
-  if (LittleFS.begin()) return true;
-  Serial.println("[cache] format + retry");
-  LittleFS.format();
-  return LittleFS.begin(true);
+  bool ok = LittleFS.begin();
+  if (!ok) {
+    Serial.println("[cache] format + retry");
+    LittleFS.format();
+    ok = LittleFS.begin(true);
+  }
+  if (ok && !LittleFS.exists("/img")) LittleFS.mkdir("/img");
+  return ok;
 }
 
 bool cacheSaveCompact(const char* json, size_t len, const char* etag) {

@@ -1,5 +1,6 @@
 #include "model.h"
 
+#include <Arduino.h>
 #include <ArduinoJson.h>
 #include <string.h>
 
@@ -16,9 +17,14 @@ static void parseSlot(Slot& s, JsonVariantConst v) {
   s.et = v["et"] | 0u;
   scopy(s.rn, sizeof(s.rn), v["rn"]);
   JsonVariantConst ss = v["s"];
-  if (ss.is<JsonArray>()) {
+  if (ss.is<JsonArrayConst>()) {
     if (ss.size() > 0) scopy(s.s1, sizeof(s.s1), ss[0]);
     if (ss.size() > 1) scopy(s.s2, sizeof(s.s2), ss[1]);
+  }
+  JsonVariantConst si = v["si"];
+  if (si.is<JsonArrayConst>()) {
+    if (si.size() > 0) scopy(s.si1, sizeof(s.si1), si[0]);
+    if (si.size() > 1) scopy(s.si2, sizeof(s.si2), si[1]);
   }
 }
 
@@ -26,7 +32,7 @@ static void parseTeam(Team& t, JsonVariantConst v) {
   if (v.isNull()) return;
   scopy(t.n, sizeof(t.n), v["n"]);
   JsonVariantConst c = v["c"];
-  if (c.is<JsonArray>() && c.size() >= 3) {
+  if (c.is<JsonArrayConst>() && c.size() >= 3) {
     t.r = c[0] | 0;
     t.g = c[1] | 0;
     t.b = c[2] | 0;
@@ -49,10 +55,15 @@ static void parseShift(Shift& s, JsonVariantConst v) {
   s.st = v["st"] | 0u;
   s.et = v["et"] | 0u;
   scopy(s.stage, sizeof(s.stage), v["stage"]);
+  scopy(s.si, sizeof(s.si), v["si"]);
   scopy(s.boss, sizeof(s.boss), v["boss"]);
   JsonVariantConst ws = v["w"];
-  if (ws.is<JsonArray>()) {
+  if (ws.is<JsonArrayConst>()) {
     for (int i = 0; i < ws.size() && i < 4; ++i) scopy(s.w[i], sizeof(s.w[i]), ws[i]);
+  }
+  JsonVariantConst wi = v["wi"];
+  if (wi.is<JsonArrayConst>()) {
+    for (int i = 0; i < wi.size() && i < 4; ++i) scopy(s.wi[i], sizeof(s.wi[i]), wi[i]);
   }
   s.big = v["big"] | false;
   s.mys = v["mys"] | false;
@@ -66,7 +77,7 @@ static void parseFestHist(FestHist& f, JsonVariantConst v) {
   f.et = v["et"] | 0u;
   scopy(f.title, sizeof(f.title), v["title"]);
   JsonVariantConst ts = v["teams"];
-  if (ts.is<JsonArray>()) {
+  if (ts.is<JsonArrayConst>()) {
     for (int i = 0; i < ts.size() && i < 3; ++i) parseTeam(f.teams[i], ts[i]);
     f.nTeams = ts.size() > 3 ? 3 : ts.size();
   }
@@ -81,10 +92,13 @@ const ModeSlots* Model::findMode(const char* key) const {
 
 bool modelParse(Model& m, const char* json, size_t len) {
   memset(&m, 0, sizeof(m));
+  // Keep the document in internal RAM. PSRAM-backed JsonDocument on ESP32
+  // Arduino 2.x corrupts nested arrays (stages / coop / events / gear).
   JsonDocument doc;
   DeserializationError err = deserializeJson(doc, json, len);
   if (err) {
-    Serial.printf("[model] json error: %s\n", err.c_str());
+    Serial.printf("[model] json error: %s len=%u heap=%u\n", err.c_str(),
+                  (unsigned)len, ESP.getFreeHeap());
     return false;
   }
 
@@ -106,7 +120,7 @@ bool modelParse(Model& m, const char* json, size_t len) {
     parseSlot(ms.a, mv["a"]);
     ms.hasA = !mv["a"].isNull();
     JsonVariantConst u = mv["u"];
-    if (u.is<JsonArray>()) {
+    if (u.is<JsonArrayConst>()) {
       for (int i = 0; i < u.size() && i < 12; ++i) parseSlot(ms.u[i], u[i]);
       ms.nu = u.size() > 12 ? 12 : u.size();
     }
@@ -122,12 +136,12 @@ bool modelParse(Model& m, const char* json, size_t len) {
     m.fest.mt = fest["mt"] | 0u;
     scopy(m.fest.title, sizeof(m.fest.title), fest["title"]);
     JsonVariantConst ts = fest["teams"];
-    if (ts.is<JsonArray>()) {
+    if (ts.is<JsonArrayConst>()) {
       for (int i = 0; i < ts.size() && i < 3; ++i) parseTeam(m.fest.teams[i], ts[i]);
       m.fest.nTeams = ts.size() > 3 ? 3 : ts.size();
     }
     JsonVariantConst tri = fest["tri"];
-    if (tri.is<JsonArray>()) {
+    if (tri.is<JsonArrayConst>()) {
       for (int i = 0; i < tri.size() && i < 2; ++i)
         scopy(m.fest.tri[i], sizeof(m.fest.tri[i]), tri[i]);
       m.fest.nTri = tri.size() > 2 ? 2 : tri.size();
@@ -136,13 +150,13 @@ bool modelParse(Model& m, const char* json, size_t len) {
 
   parseFestHist(m.festNext, doc["fests"]["next"]);
   JsonVariantConst recent = doc["fests"]["recent"];
-  if (recent.is<JsonArray>()) {
+  if (recent.is<JsonArrayConst>()) {
     for (int i = 0; i < recent.size() && i < 2; ++i)
       parseFestHist(m.festRecent[m.nFestRecent++], recent[i]);
   }
 
   JsonVariantConst events = doc["events"];
-  if (events.is<JsonArray>()) {
+  if (events.is<JsonArrayConst>()) {
     for (int i = 0; i < events.size() && i < 4; ++i) {
       EventItem& e = m.events[m.nEvents];
       JsonVariantConst v = events[i];
@@ -153,12 +167,17 @@ bool modelParse(Model& m, const char* json, size_t len) {
       scopy(e.r, sizeof(e.r), v["r"]);
       scopy(e.rn, sizeof(e.rn), v["rn"]);
       JsonVariantConst ss = v["s"];
-      if (ss.is<JsonArray>()) {
+      if (ss.is<JsonArrayConst>()) {
         if (ss.size() > 0) scopy(e.s1, sizeof(e.s1), ss[0]);
         if (ss.size() > 1) scopy(e.s2, sizeof(e.s2), ss[1]);
       }
+      JsonVariantConst esi = v["si"];
+      if (esi.is<JsonArrayConst>()) {
+        if (esi.size() > 0) scopy(e.si1, sizeof(e.si1), esi[0]);
+        if (esi.size() > 1) scopy(e.si2, sizeof(e.si2), esi[1]);
+      }
       JsonVariantConst ps = v["p"];
-      if (ps.is<JsonArray>()) {
+      if (ps.is<JsonArrayConst>()) {
         for (int k = 0; k < ps.size() && k < 10; ++k) {
           e.p[e.np].st = ps[k]["st"] | 0u;
           e.p[e.np].et = ps[k]["et"] | 0u;
@@ -170,18 +189,18 @@ bool modelParse(Model& m, const char* json, size_t len) {
   }
 
   JsonVariantConst shifts = doc["coop"]["shifts"];
-  if (shifts.is<JsonArray>()) {
+  if (shifts.is<JsonArrayConst>()) {
     for (int i = 0; i < shifts.size() && i < 8; ++i)
       parseShift(m.shifts[m.nShifts++], shifts[i]);
   }
   JsonVariantConst egg = doc["coop"]["eggstra"];
-  if (egg.is<JsonArray>()) {
+  if (egg.is<JsonArrayConst>()) {
     for (int i = 0; i < egg.size() && i < 4; ++i)
       parseShift(m.eggstra[m.nEggstra++], egg[i]);
   }
 
   JsonVariantConst gear = doc["gear"];
-  if (gear.is<JsonArray>()) {
+  if (gear.is<JsonArrayConst>()) {
     for (int i = 0; i < gear.size() && i < 6; ++i) {
       GearItem& g = m.gear[m.nGear];
       JsonVariantConst v = gear[i];
@@ -189,6 +208,7 @@ bool modelParse(Model& m, const char* json, size_t len) {
       g.p = v["p"] | 0;
       g.et = v["et"] | 0u;
       scopy(g.pn, sizeof(g.pn), v["pn"]);
+      scopy(g.img, sizeof(g.img), v["i"]);
       ++m.nGear;
     }
   }
@@ -199,5 +219,8 @@ bool modelParse(Model& m, const char* json, size_t len) {
     scopy(m.monthly, sizeof(m.monthly), monthly["n"]);
   }
 
+  Serial.printf("[model] modes=%d shifts=%d egg=%d events=%d gear=%d fest=%d nf=%lu s1=%s\n",
+                m.nModes, m.nShifts, m.nEggstra, m.nEvents, m.nGear, m.fest.present,
+                (unsigned long)m.nf, m.nModes ? m.modes[0].a.s1 : "-");
   return m.nModes > 0 || m.nShifts > 0 || m.nEvents > 0;
 }

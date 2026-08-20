@@ -10,6 +10,8 @@ struct Slot {
   char rn[28] = {0};   // rule name (zh)
   char s1[40] = {0};   // stage 1
   char s2[40] = {0};   // stage 2
+  char si1[72] = {0};  // image keys s:{hash}_{0|1}
+  char si2[72] = {0};
 };
 
 struct ModeSlots {
@@ -29,6 +31,7 @@ struct EventItem {
   char r[260] = {0};
   char rn[28] = {0};
   char s1[40] = {0}, s2[40] = {0};
+  char si1[72] = {0}, si2[72] = {0};
   Period p[10];
   int np = 0;
 };
@@ -36,8 +39,10 @@ struct EventItem {
 struct Shift {
   uint32_t st = 0, et = 0;
   char stage[40] = {0};
+  char si[72] = {0};
   char boss[24] = {0};   // empty when none
   char w[4][32] = {0};
+  char wi[4][72] = {0};
   bool big = false, mys = false, gmys = false;
 };
 
@@ -73,6 +78,7 @@ struct GearItem {
   int32_t p = 0;
   uint32_t et = 0;
   char pn[26] = {0};
+  char img[72] = {0};
 };
 
 struct Model {

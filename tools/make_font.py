@@ -77,28 +77,41 @@ def collect_charset() -> set[int]:
     chars.discard("\n")
     chars.discard("\r")
     chars.discard("\t")
+    chars |= set("·•・※→←「」『』—–…")
     return {ord(c) for c in chars}
 
 
 def rasterize(font: ImageFont.FreeTypeFont, ch: str):
-    """Return (w, h, xoff, yoff, adv, alpha bytes 4bpp-packed)."""
+    """Return (w, h, xoff, yoff, adv, alpha bytes 4bpp-packed).
+
+    Glyphs are placed in a shared em box (origin = left + ascender) so mixed
+    CJK/ASCII share one baseline instead of each sitting at y=0.
+    """
+    from PIL import Image, ImageDraw
+
     try:
         length = font.getlength(ch)
     except Exception:
         return None
-    mask = font.getmask(ch, mode="L")
-    w, h = mask.size
     adv = max(1, int(round(length)))
-    if w == 0 or h == 0:
+    px = font.size
+    canvas = Image.new("L", (max(adv, 8) + 8, px + 8), 0)
+    ImageDraw.Draw(canvas).text((2, 2), ch, font=font, fill=255, anchor="la")
+    bbox = canvas.getbbox()
+    if not bbox:
         return (0, 0, 0, 0, adv, b"")
-    pixels = list(mask)
+    l, t, r, b = bbox
+    cropped = canvas.crop((l, t, r, b))
+    w, h = cropped.size
+    xoff = l - 2
+    yoff = t - 2
+    pixels = list(cropped.getdata())
     packed = bytearray()
     for i in range(0, len(pixels), 2):
         hi = pixels[i] >> 4
         lo = pixels[i + 1] >> 4 if i + 1 < len(pixels) else 0
         packed.append((hi << 4) | lo)
-    # PIL renders with anchor 'la': origin = left of advance, top of ascender
-    return (w, h, 0, 0, adv, bytes(packed))
+    return (w, h, xoff, yoff, adv, bytes(packed))
 
 
 def build_font(font_path: Path, px: int, charset: list) -> bytes:

@@ -42,6 +42,8 @@ bool timeSyncNtp(uint32_t timeoutMs) {
 }
 
 void timeSeedFromRtc() {
+  // TZ must be set before any localtime_r / mktime, including boots that skip NTP.
+  configTzTime("CST-8", kNtpServers[0], kNtpServers[1], kNtpServers[2]);
   if (timeValid()) return;
   m5::rtc_date_t d;
   m5::rtc_time_t t;

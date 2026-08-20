@@ -2,17 +2,55 @@
 
 #include <Arduino.h>
 #include <HTTPClient.h>
+#include <LittleFS.h>
 #include <WiFi.h>
+#include <mbedtls/ssl.h>
+#include "ssl_client.h"
 
 #include "certs.h"
 
-static int caIndex = 0;  // remembered working root CA
-static const char* const kCas[] = {CA_GTS_ROOT_R4, CA_ISRG_ROOT_X1};
+// Arduino-ESP32 2.x WiFiClientSecure::read() returns -1 when available()==0,
+// and available() only counts already-decrypted bytes. Cloudflare sends ~8KB
+// TLS records, so a 9KB body stalls after the first record. Pull the next
+// record with mbedtls_ssl_read directly.
+class TlsClient : public WiFiClientSecure {
+ public:
+  int read(uint8_t* buf, size_t size) override {
+    if (!buf || !size || !sslclient) return -1;
+    int peeked = 0;
+    if (_peek >= 0) {
+      buf[0] = (uint8_t)_peek;
+      _peek = -1;
+      peeked = 1;
+      ++buf;
+      --size;
+      if (!size) return 1;
+    }
+    int r = mbedtls_ssl_read(&sslclient->ssl_ctx, buf, size);
+    if (r == MBEDTLS_ERR_SSL_WANT_READ || r == MBEDTLS_ERR_SSL_WANT_WRITE) {
+      return peeked ? peeked : -1;
+    }
+    if (r < 0) return peeked ? peeked : r;
+    return r + peeked;
+  }
+};
+
+// mbedTLS parses every PEM in the buffer, so both Cloudflare issuers
+// (Google Trust Services + Let's Encrypt) are accepted without rotating.
+static const char* caBundle() {
+  static String bundle;
+  if (!bundle.length()) {
+    bundle.reserve(sizeof(CA_GTS_ROOT_R4) + sizeof(CA_ISRG_ROOT_X1));
+    bundle += CA_GTS_ROOT_R4;
+    bundle += CA_ISRG_ROOT_X1;
+  }
+  return bundle.c_str();
+}
 
 bool wifiConnect(const char* ssid, const char* pass, uint32_t timeoutMs) {
   if (WiFi.status() == WL_CONNECTED) return true;
   WiFi.mode(WIFI_STA);
-  WiFi.setSleep(false);  // responsiveness over power (always-on desk mode)
+  WiFi.setSleep(false);  // TLS/HTTP reliability over power (always-on desk)
   WiFi.begin(ssid, pass);
   uint32_t t0 = millis();
   while (WiFi.status() != WL_CONNECTED) {
@@ -33,32 +71,164 @@ void wifiKeepAlive() {
   }
 }
 
+static NetYieldFn gYield = nullptr;
+
+void netSetYield(NetYieldFn fn) { gYield = fn; }
+
+static bool yieldAbort() { return gYield && gYield(); }
+
+static bool readHttpBody(HTTPClient& http, String& body, uint32_t timeoutMs) {
+  int len = http.getSize();
+  WiFiClient* stream = http.getStreamPtr();
+  if (!stream) return false;
+  body = "";
+  if (len > 200000) {
+    Serial.printf("[net] body too large: %d\n", len);
+    return false;
+  }
+  if (len > 0 && !body.reserve(len + 1)) {
+    Serial.printf("[net] reserve failed len=%d heap=%u\n", len, ESP.getFreeHeap());
+    return false;
+  }
+  uint32_t t0 = millis();
+  int got = 0;
+  while (len <= 0 || got < len) {
+    if (millis() - t0 > timeoutMs) {
+      Serial.printf("[net] body timeout got=%d want=%d\n", got, len);
+      break;
+    }
+    if (len <= 0 && !http.connected() && !stream->available()) break;
+    char tmp[512];
+    int nwant = (int)sizeof(tmp);
+    if (len > 0 && got + nwant > len) nwant = len - got;
+    int n = stream->read((uint8_t*)tmp, nwant);
+    if (n > 0) {
+      body.concat(tmp, (unsigned)n);
+      got += n;
+      continue;
+    }
+    if (len <= 0) break;
+    delay(2);
+  }
+  return body.length() > 0;
+}
+
 int httpsGet(const char* host, const char* path, const char* etagIn,
              String& body, String& etagOut) {
   String url = String("https://") + host + path;
-  for (int attempt = 0; attempt < 2; ++attempt) {
-    WiFiClientSecure client;
-    client.setCACert(kCas[caIndex]);
-    client.setTimeout(15000);  // ms
-    client.setHandshakeTimeout(15);
+  Serial.printf("[net] httpsGet %s heap=%u\n", path, ESP.getFreeHeap());
+  for (int attempt = 0; attempt < 3; ++attempt) {
+    if (attempt) delay(400);
+    TlsClient client;
+    client.setCACert(caBundle());
+    client.setTimeout(20);           // WiFiClientSecure: seconds
+    client.setHandshakeTimeout(30);  // seconds
     HTTPClient http;
     if (!http.begin(client, url)) continue;
-    http.setTimeout(15000);
+    http.setTimeout(20000);  // HTTPClient: milliseconds
+    http.useHTTP10(true);    // Content-Length, no chunked (Cloudflare default)
+    http.setReuse(false);
     http.setUserAgent("M5Paper-Splatoon/1.0");
+    const char* hdrs[] = {"ETag", "X-Cache", "Content-Length", "Transfer-Encoding"};
+    http.collectHeaders(hdrs, 4);
     if (etagIn && etagIn[0]) http.addHeader("If-None-Match", etagIn);
     int code = http.GET();
-    if (code >= 0) {  // TLS handshake succeeded with this root
+    int sz = http.getSize();
+    Serial.printf("[net] GET done code=%d size=%d te=%s heap=%u try=%d\n", code, sz,
+                  http.header("Transfer-Encoding").c_str(), ESP.getFreeHeap(), attempt);
+    Serial.flush();
+    if (code >= 0) {
       if (code == 200) {
-        body = http.getString();
+        if (!readHttpBody(http, body, 20000)) {
+          Serial.printf("[net] body read failed heap=%u\n", ESP.getFreeHeap());
+        }
         etagOut = http.header("ETag");
+        Serial.printf("[net] body=%u etag=%s\n", (unsigned)body.length(),
+                      etagOut.c_str());
       }
       http.end();
       return code;
     }
-    // transport error — likely wrong root CA after Cloudflare rotation
-    Serial.printf("[net] TLS fail with CA#%d (%d), rotating\n", caIndex, code);
-    caIndex = (caIndex + 1) % (sizeof(kCas) / sizeof(kCas[0]));
+    char errbuf[96] = {0};
+    int mbed = client.lastError(errbuf, sizeof(errbuf));
+    Serial.printf("[net] TLS fail http=%d mbedtls=%d %s try=%d\n", code, mbed, errbuf,
+                  attempt);
     http.end();
+  }
+  return -1;
+}
+
+int httpsGetToFile(const char* host, const char* path, const char* fsPath) {
+  String url = String("https://") + host + path;
+  Serial.printf("[net] httpsGetToFile %s\n", path);
+  for (int attempt = 0; attempt < 3; ++attempt) {
+    if (attempt) delay(400);
+    TlsClient client;
+    client.setCACert(caBundle());
+    client.setTimeout(20);
+    client.setHandshakeTimeout(30);
+    HTTPClient http;
+    if (!http.begin(client, url)) continue;
+    http.setTimeout(30000);
+    http.useHTTP10(true);
+    http.setReuse(false);
+    http.setUserAgent("M5Paper-Splatoon/1.0");
+    int code = http.GET();
+    int sz = http.getSize();
+    Serial.printf("[net] file GET code=%d size=%d try=%d\n", code, sz, attempt);
+    if (code != 200) {
+      http.end();
+      if (code >= 0) return code;
+      continue;
+    }
+    WiFiClient* stream = http.getStreamPtr();
+    File f = LittleFS.open(fsPath, "w");
+    if (!f || !stream) {
+      http.end();
+      if (f) f.close();
+      return -2;
+    }
+    uint32_t t0 = millis();
+    uint32_t last = t0;
+    int got = 0;
+    uint8_t buf[1024];
+    bool aborted = false;
+    while (sz <= 0 || got < sz) {
+      if (yieldAbort()) {
+        aborted = true;
+        break;
+      }
+      if (millis() - t0 > 25000) break;
+      if (millis() - last > 8000) break;
+      int nwant = (int)sizeof(buf);
+      if (sz > 0 && got + nwant > sz) nwant = sz - got;
+      int n = stream->read(buf, nwant);
+      if (n > 0) {
+        f.write(buf, n);
+        got += n;
+        last = millis();
+        continue;
+      }
+      if (sz <= 0) break;
+      delay(5);
+    }
+    f.close();
+    http.end();
+    if (aborted) {
+      LittleFS.remove(fsPath);
+      Serial.println("[net] file abort");
+      return kNetAbort;
+    }
+    if (sz > 0 && got != sz) {
+      LittleFS.remove(fsPath);
+      Serial.printf("[net] file short %d/%d\n", got, sz);
+      continue;
+    }
+    if (got < 8) {
+      LittleFS.remove(fsPath);
+      continue;
+    }
+    return 200;
   }
   return -1;
 }
