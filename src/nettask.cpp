@@ -20,6 +20,8 @@ static String* sEtag = nullptr;
 static SemaphoreHandle_t sStateMx = nullptr;
 static QueueHandle_t sEvtQ = nullptr;
 static volatile bool sForceFetch = false;
+static volatile bool sForceImgs = false;
+static volatile bool sBusy = false;
 static volatile bool sPaused = false;
 static volatile bool sPauseAck = false;
 static bool sStarted = false;
@@ -32,6 +34,8 @@ void stateUnlock() {
 }
 
 void netRequestFetch() { sForceFetch = true; }
+void netRequestImgs() { sForceImgs = true; }
+bool netBusy() { return sBusy || sForceFetch || sForceImgs || sPaused; }
 
 void netPause(bool on) {
   sPaused = on;
@@ -77,9 +81,9 @@ static void scheduleNextFetch(bool ok) {
   sSt->nextFetch = next;
 }
 
-static bool fetchCompact() {
+static bool fetchCompact(bool force) {
   String etagIn;
-  {
+  if (!force) {
     StateHold hold;
     etagIn = *sEtag;
   }
@@ -117,81 +121,107 @@ static bool fetchCompact() {
     *sEtag = newEtag;
     sSt->offline = false;
     sSt->lastFetchOk = nowEpoch();
-    imgQueue(*sModel);
+    imgQueuePage(*sModel, sSt->page);
   }
   scheduleNextFetch(true);
   return true;
 }
 
+static bool ensureRadio() {
+  if (wifiConnected()) return true;
+  bool ok = wifiConnect(sCfg->ssid(), sCfg->password(), 15000);
+  {
+    StateHold hold;
+    sSt->wifiOk = ok;
+    if (!ok) sSt->offline = true;
+  }
+  post(kNetEvtWifi);
+  return ok;
+}
+
 static void netTask(void*) {
   Serial.printf("[nettask] start core=%d\n", xPortGetCoreID());
-  uint32_t lastKeep = 0;
   for (;;) {
     if (sPaused) {
+      sBusy = false;
       sPauseAck = true;
+      wifiRadioOff();
       vTaskDelay(pdMS_TO_TICKS(50));
       continue;
     }
     sPauseAck = false;
-    if (sCfg->wifiConfigured()) {
-      if (!wifiConnected()) {
-        bool ok = wifiConnect(sCfg->ssid(), sCfg->password(), 15000);
-        {
-          StateHold hold;
-          sSt->wifiOk = ok;
-          if (!ok) sSt->offline = true;
-        }
-        post(kNetEvtWifi);
-        if (ok && !sSt->timeOk) {
-          bool t = timeSyncNtp(12000);
-          StateHold hold;
-          sSt->timeOk = t;
-          post(kNetEvtNtp);
-        }
-      } else if (!sSt->timeOk) {
-        bool t = timeSyncNtp(8000);
-        StateHold hold;
-        sSt->timeOk = t;
-        if (t) post(kNetEvtNtp);
-      }
 
-      uint32_t now = nowEpoch();
-      bool due = false;
+    if (!sCfg->wifiConfigured()) {
+      sBusy = false;
+      vTaskDelay(pdMS_TO_TICKS(200));
+      continue;
+    }
+
+    uint32_t now = nowEpoch();
+    bool fetchDue = false, needNtp = false;
+    {
+      StateHold hold;
+      fetchDue = sCfg->autoFetch() && (sForceFetch || now >= sSt->nextFetch);
+      needNtp = !sSt->timeOk;
+    }
+    bool imgs = sForceImgs || imgPending();
+    if (!fetchDue && !imgs && !needNtp && !sForceFetch) {
+      sBusy = false;
+      wifiRadioOff();
+      vTaskDelay(pdMS_TO_TICKS(200));
+      continue;
+    }
+
+    sBusy = true;
+    if (!ensureRadio()) {
+      sForceFetch = false;
+      sForceImgs = false;
+      scheduleNextFetch(false);
+      post(kNetEvtFetchFail);
+      wifiRadioOff();
+      sBusy = false;
+      vTaskDelay(pdMS_TO_TICKS(1000));
+      continue;
+    }
+
+    if (needNtp) {
+      bool t = timeSyncNtp(12000);
       {
         StateHold hold;
-        due = sCfg->autoFetch() && (sForceFetch || now >= sSt->nextFetch);
+        sSt->timeOk = t;
       }
-      if (due && wifiConnected()) {
-        sForceFetch = false;
-        static uint32_t lastAttempt = 0;
-        if (now - lastAttempt >= 30 || lastAttempt == 0) {
-          lastAttempt = now;
-          bool ok = fetchCompact();
-          if (!ok) {
-            {
-              StateHold hold;
-              sSt->offline = true;
-            }
-            scheduleNextFetch(false);
-            post(kNetEvtFetchFail);
-          } else {
-            post(kNetEvtFetchOk);
+      if (t) post(kNetEvtNtp);
+    }
+
+    if (fetchDue || sForceFetch) {
+      bool forced = sForceFetch;
+      sForceFetch = false;
+      static uint32_t lastAttempt = 0;
+      now = nowEpoch();
+      if (forced || lastAttempt == 0 || now - lastAttempt >= 30) {
+        lastAttempt = now;
+        bool ok = fetchCompact(forced);
+        if (!ok) {
+          {
+            StateHold hold;
+            sSt->offline = true;
           }
+          scheduleNextFetch(false);
+          post(kNetEvtFetchFail);
+        } else {
+          post(kNetEvtFetchOk);
         }
       }
-
-      if (wifiConnected() && *sHasModel) {
-        imgPump();
-        if (imgJustFinished()) post(kNetEvtImg);
-      }
     }
 
-    uint32_t ms = millis();
-    if (ms - lastKeep > 10000) {
-      lastKeep = ms;
-      wifiKeepAlive();
+    if (imgPump()) {
+      if (imgJustFinished()) post(kNetEvtImg);
+      continue;
     }
-    vTaskDelay(pdMS_TO_TICKS(40));
+    sForceImgs = false;
+    wifiRadioOff();
+    sBusy = false;
+    vTaskDelay(pdMS_TO_TICKS(50));
   }
 }
 

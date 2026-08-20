@@ -67,8 +67,10 @@ static const char* caBundle() {
 
 bool wifiConnect(const char* ssid, const char* pass, uint32_t timeoutMs) {
   if (WiFi.status() == WL_CONNECTED) return true;
+  WiFi.persistent(false);
+  WiFi.setAutoReconnect(false);
   WiFi.mode(WIFI_STA);
-  WiFi.setSleep(false);  // TLS/HTTP reliability over power (always-on desk)
+  WiFi.setSleep(false);  // TLS/HTTP reliability while the radio is up
   WiFi.begin(ssid, pass);
   uint32_t t0 = millis();
   while (WiFi.status() != WL_CONNECTED) {
@@ -81,6 +83,13 @@ bool wifiConnect(const char* ssid, const char* pass, uint32_t timeoutMs) {
 
 bool wifiConnected() {
   return WiFi.status() == WL_CONNECTED;
+}
+
+void wifiRadioOff() {
+  if (WiFi.getMode() == WIFI_OFF) return;
+  WiFi.disconnect(true, false);
+  WiFi.mode(WIFI_OFF);
+  Serial.println("[net] radio off");
 }
 
 void wifiKeepAlive() {

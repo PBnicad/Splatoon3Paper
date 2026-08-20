@@ -7,6 +7,7 @@
 #include "config.h"
 #include "font.h"
 #include "img.h"
+#include "power.h"
 #include "timekeeper.h"
 
 namespace render {
@@ -33,6 +34,7 @@ constexpr int kLine24 = kInk24 + 6;
 static void pushFull(bool quality) {
   // Page turns and data redraws use GC16 full-frame refresh to clear ghosts.
   // Minute header ticks keep epd_fastest via refreshHeader().
+  displayWake();
   M5.Display.setEpdMode(quality ? epd_mode_t::epd_quality : epd_mode_t::epd_fastest);
   page.pushSprite(0, 0);
   if (quality) {
@@ -42,6 +44,7 @@ static void pushFull(bool quality) {
     M5.Display.setEpdMode(epd_mode_t::epd_quality);
     page.pushSprite(0, 0);
   }
+  displayRest();
 }
 
 bool begin() {
@@ -130,8 +133,8 @@ static void drawHeaderInto(M5Canvas* c, const Model& m, const AppStatus& st) {
     uint32_t t = nowEpoch();
     fmtDateWeek(t, date, sizeof(date));
     fmtClock(t, clock, sizeof(clock));
-    font24.draw(c, 16, 4, date, C_DARK, C_WHITE);
-    font24.draw(c, 16, 4 + kInk24 + 4, clock, C_BLACK, C_WHITE);
+    font24.draw(c, 16, 2, date, C_DARK, C_WHITE);
+    font24.draw(c, 16, 2 + kInk24 - 4, clock, C_BLACK, C_WHITE);
   }
   const int iconY = (kHeaderH - 14) / 2;
   int rx = kW - 16;
@@ -152,8 +155,10 @@ static void drawHeaderInto(M5Canvas* c, const Model& m, const AppStatus& st) {
 void refreshHeader(const Model& m, const AppStatus& st) {
   drawHeaderInto(&header, m, st);
   drawHeaderInto(&page, m, st);
+  displayWake();
   M5.Display.setEpdMode(epd_mode_t::epd_fastest);
   header.pushSprite(0, 0);
+  displayRest();
 }
 
 // ------------------------------------------------------------- page 1 cards
@@ -477,6 +482,11 @@ static void drawSettingsPage(const Model& m, const AppStatus& st) {
   font24.draw(&page, 36, y2 + 16, ui::AboutTitle, C_BLACK, C_WHITE);
   font24.draw(&page, 36, y2 + 16 + kInk24 + 10, ui::AboutHint, C_GRAY, C_WHITE);
 
+  int y3 = y2 + 100 + 16;
+  page.fillRoundRect(16, y3, kW - 32, 100, 8, C_LIGHT);
+  font24.draw(&page, 36, y3 + 16, ui::RefreshTitle, C_BLACK, C_LIGHT);
+  font24.draw(&page, 36, y3 + 16 + kInk24 + 10, ui::RefreshHint, C_DARK, C_LIGHT);
+
   drawFooter(m, kPageSettings);
 }
 
@@ -765,6 +775,8 @@ int settingsHit(int x, int y, bool about) {
   if (y >= kContentY && y < kContentY + 100) return 1;
   int y2 = kContentY + 116;
   if (y >= y2 && y < y2 + 100) return 2;
+  int y3 = y2 + 116;
+  if (y >= y3 && y < y3 + 100) return 4;
   return 0;
 }
 

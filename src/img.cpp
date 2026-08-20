@@ -8,6 +8,8 @@
 #include "cache.h"
 #include "config.h"
 #include "net.h"
+#include "render.h"
+#include "timekeeper.h"
 
 static void fsName(const char* key, char* out, size_t cap) {
   // LittleFS name component max is 32. key is s:{64hex}_{0|1} — keep kind + 8 hex.
@@ -221,6 +223,75 @@ void imgQueue(const Model& m) {
     for (int w = 0; w < 4; w++) addKey(gQueue, gQn, 64, m.shifts[i].wi[w]);
   }
   Serial.printf("[img] queued %d\n", gQn);
+}
+
+static void addModeVisible(const ModeSlots* mm, int maxSlots) {
+  if (!mm) return;
+  uint32_t now = nowEpoch();
+  int added = 0;
+  auto take = [&](const Slot& s) {
+    if (!s.st || s.et <= now || added >= maxSlots) return;
+    addSlot(gQueue, gQn, 64, s);
+    ++added;
+  };
+  if (mm->hasA) take(mm->a);
+  for (int i = 0; i < mm->nu; ++i) take(mm->u[i]);
+}
+
+void imgQueuePage(const Model& m, int page) {
+  gQn = 0;
+  gQi = 0;
+  uint32_t now = nowEpoch();
+  switch (page) {
+    case render::kPageRegular:
+      addModeVisible(m.findMode(ui::ModeRegular), 3);
+      break;
+    case render::kPageAnarchy:
+      addModeVisible(m.findMode(ui::ModeSeries), 2);
+      addModeVisible(m.findMode(ui::ModeOpen), 2);
+      break;
+    case render::kPageX:
+      addModeVisible(m.findMode(ui::ModeX), 3);
+      break;
+    case render::kPageFest:
+      addModeVisible(m.findMode(ui::ModeFestOpen), 2);
+      addModeVisible(m.findMode(ui::ModeFestPro), 2);
+      break;
+    case render::kPageEvents:
+      for (int i = 0; i < m.nEvents && i < 2; i++) {
+        addKey(gQueue, gQn, 64, m.events[i].si1);
+        addKey(gQueue, gQn, 64, m.events[i].si2);
+      }
+      break;
+    case render::kPageSalmon: {
+      int i0 = m.liveShiftIndex(now);
+      if (i0 < 0) i0 = 0;
+      for (int i = i0; i < m.nShifts && i < i0 + 3; i++) {
+        addKey(gQueue, gQn, 64, m.shifts[i].si);
+        if (i == i0) {
+          for (int w = 0; w < 4; w++) addKey(gQueue, gQn, 64, m.shifts[i].wi[w]);
+        }
+      }
+      break;
+    }
+    case render::kPageGear:
+      for (int i = 0; i < m.nGear && i < 6; i++) addKey(gQueue, gQn, 64, m.gear[i].img);
+      break;
+    default:
+      break;
+  }
+  Serial.printf("[img] page %d queued %d\n", page, gQn);
+}
+
+bool imgPending() {
+  while (gQi < gQn) {
+    char path[96];
+    fsName(gQueue[gQi], path, sizeof(path));
+    FsHold hold;
+    if (!LittleFS.exists(path)) return true;
+    ++gQi;
+  }
+  return false;
 }
 
 static bool gNeedPaint = false;

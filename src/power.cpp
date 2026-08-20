@@ -10,6 +10,7 @@
 
 static constexpr gpio_num_t kBtnBPin = GPIO_NUM_38;  // M5Paper wheel press
 static constexpr uint32_t kDblMs = 500;
+static bool gDispAwake = true;
 
 int powerBatteryPercent() {
   int level = M5.Power.getBatteryLevel();
@@ -19,6 +20,29 @@ int powerBatteryPercent() {
   if (mv >= 4150) return 100;
   if (mv <= 3450) return 0;
   return (mv - 3450) * 100 / (4150 - 3450);
+}
+
+void displayWake() {
+  if (gDispAwake) return;
+  M5.Display.wakeup();
+  gDispAwake = true;
+}
+
+void displayRest() {
+  if (!gDispAwake) return;
+  M5.Display.waitDisplay();
+  M5.Display.sleep();
+  gDispAwake = false;
+}
+
+void powerIdleSleep(uint32_t maxMs) {
+  // ESP32 EXT1 has no ANY_LOW. Touch INT (GPIO 36) is owned by GT911 —
+  // stealing it for EXT0 immediately re-wakes. Timer slices + UART RX
+  // are enough: wheel/touch are sampled after each slice.
+  if (maxMs < 80) maxMs = 80;
+  if (maxMs > 250) maxMs = 250;
+  esp_sleep_enable_timer_wakeup((uint64_t)maxMs * 1000ULL);
+  esp_light_sleep_start();
 }
 
 static bool btnBDown() { return digitalRead(kBtnBPin) == LOW; }
@@ -51,6 +75,7 @@ void powerEnterSleep() {
   btStop();
 #endif
 
+  displayWake();
   M5.Display.setEpdMode(epd_mode_t::epd_quality);
   M5Canvas c(&M5.Display);
   c.setColorDepth(4);
@@ -61,7 +86,7 @@ void powerEnterSleep() {
   powerDrawSleepHint(c);
   c.pushSprite(0, 0);
   c.deleteSprite();
-  M5.Display.waitDisplay();
+  displayRest();
 
   // The double-click that entered sleep must not count as a wake.
   pinMode(kBtnBPin, INPUT);

@@ -8,6 +8,7 @@
 void netInit();  // PSRAM TLS allocators; call once after M5.begin()
 bool wifiConnect(const char* ssid, const char* pass, uint32_t timeoutMs);
 bool wifiConnected();
+void wifiRadioOff();
 void wifiKeepAlive();
 
 // HTTP GET https://host/path with pinned CA roots (both Cloudflare issuers

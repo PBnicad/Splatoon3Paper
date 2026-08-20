@@ -21,6 +21,8 @@ struct StateHold {
 };
 
 void netRequestFetch();  // UI: force a compact refresh
+void netRequestImgs();   // UI: radio on to fill the current image queue
+bool netBusy();          // radio session in progress — UI should not light-sleep
 void netPause(bool on);  // UI: stop net work around Wi-Fi setup
 
 enum NetEvt : uint8_t {

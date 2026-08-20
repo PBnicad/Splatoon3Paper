@@ -8,6 +8,7 @@
 #include "config.h"
 #include "font.h"
 #include "net.h"
+#include "power.h"
 #include "render.h"
 
 namespace {
@@ -41,8 +42,10 @@ enum Ui { WELCOME, LIST, PASS, BAD } gUi = WELCOME;
 bool gFirst = false;
 
 void fullPush(M5Canvas& c) {
+  displayWake();
   M5.Display.setEpdMode(epd_mode_t::epd_quality);
   c.pushSprite(0, 0);
+  displayRest();
 }
 
 void drawRssi(M5Canvas& c, int x, int y, int rssi) {

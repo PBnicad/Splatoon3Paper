@@ -42,7 +42,7 @@ void refreshHeader(const Model& m, const AppStatus& st);  // minute tick strip
 bool dumpCanvas();
 M5Canvas* canvas();  // full-screen page sprite (wifi onboarding reuses it)
 int footerPageAt(int x, int y, const Model& m);  // page id, or -1
-int settingsHit(int x, int y, bool about);       // 0 none, 1 wifi, 2 about, 3 back
+int settingsHit(int x, int y, bool about);  // 0 none, 1 wifi, 2 about, 3 back, 4 refresh
 int neighborPage(const Model& m, int current, int dir);
 int clampPage(const Model& m, int page);
 int defaultPage(const Model& m);

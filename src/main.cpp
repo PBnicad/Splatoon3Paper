@@ -15,6 +15,7 @@
 #include "cache.h"
 #include "config.h"
 #include "font.h"
+#include "img.h"
 #include "model.h"
 #include "net.h"
 #include "nettask.h"
@@ -30,6 +31,8 @@ static AppStatus st;
 static String etag;
 static uint32_t lastMinute = 0;
 static uint32_t gBodyUntil = 0;  // redraw maps when the current 2h slot ends
+static uint32_t gLastBtnB = 0;
+static uint32_t gLastSerial = 0;
 
 static int readWheelDir() {
   bool up = M5.BtnA.wasPressed();
@@ -70,10 +73,19 @@ static void paint(bool quality = true) {
   gBodyUntil = model.nextChangeAt(nowEpoch());
 }
 
+static void queuePageImages() {
+  {
+    StateHold hold;
+    imgQueuePage(model, st.page);
+  }
+  if (imgPending()) netRequestImgs();
+}
+
 static void goPage(int page) {
   st.page = page;
   st.about = false;
   paint(true);
+  queuePageImages();
 }
 
 static void goNeighbor(int dir) {
@@ -126,6 +138,9 @@ static void handleTap(int x, int y) {
     } else if (hit == 3) {
       st.about = false;
       paint();
+    } else if (hit == 4) {
+      Serial.println("[app] manual refresh");
+      netRequestFetch();
     }
     return;
   }
@@ -162,9 +177,12 @@ static void handleSerial() {
         cfg.setAutoFetch(on);
         Serial.printf("[app] autofetch=%d\n", on);
       } else if (line == "shot") {
+        netPause(true);
         Serial.println("[app] dump canvas start");
         render::dumpCanvas();
         Serial.println("[app] dump canvas done");
+        gLastSerial = millis();
+        netPause(false);
       } else if (line == "dumpcache") {
         FsHold hold;
         File f = LittleFS.open("/compact.json", "r");
@@ -183,9 +201,11 @@ static void handleSerial() {
       } else if (line == "sleepview") {
         M5Canvas* c = render::canvas();
         if (c) {
+          displayWake();
           powerDrawSleepHint(*c);
           M5.Display.setEpdMode(epd_mode_t::epd_quality);
           c->pushSprite(0, 0);
+          displayRest();
         }
       } else if (line.startsWith("page ")) {
         goPage(line.substring(5).toInt());
@@ -266,7 +286,10 @@ void setup() {
   loadCacheIfEmpty();
   if (!cfg.wifiConfigured()) st.noWifiConfig = true;
   paint();
-  if (cfg.wifiConfigured()) netRequestFetch();
+  if (cfg.wifiConfigured()) {
+    queuePageImages();
+    netRequestFetch();
+  }
   netTaskStart(cfg, model, hasModel, st, etag);
   if (!cfg.wifiConfigured())
     Serial.println("[app] no wifi; open 设置 or send: wifi SSID PASSWORD");
@@ -274,18 +297,19 @@ void setup() {
 
 void loop() {
   M5.update();
+  if (Serial.available()) gLastSerial = millis();
   handleSerial();
 
   if (M5.BtnB.wasPressed()) {
-    static uint32_t lastClick = 0;
     uint32_t t = millis();
-    if (lastClick && t - lastClick < 500) {
-      lastClick = 0;
+    if (gLastBtnB && t - gLastBtnB < 500) {
+      gLastBtnB = 0;
       Serial.println("[app] wheel double-click → sleep");
       powerEnterSleep();
       paint();
+      queuePageImages();
     } else {
-      lastClick = t;
+      gLastBtnB = t;
     }
   }
 
@@ -300,6 +324,7 @@ void loop() {
     st.battery = powerBatteryPercent();
     if (gBodyUntil && now >= gBodyUntil) {
       paint(true);  // 18:00-20:00 → 20:00-22:00 without waiting for fetch
+      queuePageImages();
     } else {
       StateHold hold;
       render::refreshHeader(model, st);
@@ -313,12 +338,20 @@ void loop() {
     else if (ev == kNetEvtImg) fast = true;
     else if (ev == kNetEvtWifi || ev == kNetEvtNtp) head = true;
   }
-  if (full) paint(true);
-  else if (fast) paint(false);
-  else if (head) {
+  if (full) {
+    paint(true);
+  } else if (fast) {
+    paint(false);
+  } else if (head) {
     StateHold hold;
     render::refreshHeader(model, st);
   }
 
-  delay(20);
+  bool waitDbl = gLastBtnB && (millis() - gLastBtnB < 500);
+  bool serialHot = (millis() - gLastSerial < 2000);
+  if (!netBusy() && !waitDbl && !serialHot) {
+    powerIdleSleep(250);
+  } else {
+    delay(20);
+  }
 }
