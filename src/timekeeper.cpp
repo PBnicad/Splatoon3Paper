@@ -73,6 +73,15 @@ void fmtClock(uint32_t epoch, char* out, size_t n) {
   snprintf(out, n, "%02d:%02d", lt.tm_hour, lt.tm_min);
 }
 
+void fmtDateWeek(uint32_t epoch, char* out, size_t n) {
+  struct tm lt;
+  localParts(epoch, lt);
+  static const char* kWd[] = {"周日", "周一", "周二", "周三", "周四", "周五", "周六"};
+  int wd = lt.tm_wday;
+  if (wd < 0 || wd > 6) wd = 0;
+  snprintf(out, n, "%d月%d日 %s", lt.tm_mon + 1, lt.tm_mday, kWd[wd]);
+}
+
 void fmtHM(uint32_t epoch, char* out, size_t n) {
   struct tm lt;
   localParts(epoch, lt);

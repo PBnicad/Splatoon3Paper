@@ -3,11 +3,22 @@
 #include <Arduino.h>
 #include <LittleFS.h>
 #include <time.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 static const char* kCompactPath = "/compact.json";
 static const char* kMetaPath = "/meta.json";
+static SemaphoreHandle_t gFsMx = nullptr;
+
+void fsLock() {
+  if (gFsMx) xSemaphoreTake(gFsMx, portMAX_DELAY);
+}
+void fsUnlock() {
+  if (gFsMx) xSemaphoreGive(gFsMx);
+}
 
 bool cacheBegin() {
+  if (!gFsMx) gFsMx = xSemaphoreCreateMutex();
   bool ok = LittleFS.begin();
   if (!ok) {
     Serial.println("[cache] format + retry");
@@ -19,6 +30,7 @@ bool cacheBegin() {
 }
 
 bool cacheSaveCompact(const char* json, size_t len, const char* etag) {
+  FsHold hold;
   File f = LittleFS.open(kCompactPath, "w");
   if (!f) return false;
   size_t written = f.write((const uint8_t*)json, len);
@@ -35,6 +47,7 @@ bool cacheSaveCompact(const char* json, size_t len, const char* etag) {
 }
 
 char* cacheLoadCompact(size_t& len) {
+  FsHold hold;
   if (!LittleFS.exists(kCompactPath)) return nullptr;
   File f = LittleFS.open(kCompactPath, "r");
   if (!f) return nullptr;
@@ -51,6 +64,7 @@ char* cacheLoadCompact(size_t& len) {
 bool cacheLoadMeta(uint32_t& fetchedAt, String& etag) {
   fetchedAt = 0;
   etag = "";
+  FsHold hold;
   if (!LittleFS.exists(kMetaPath)) return false;
   File f = LittleFS.open(kMetaPath, "r");
   if (!f) return false;

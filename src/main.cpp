@@ -14,9 +14,8 @@
 #include "cache.h"
 #include "config.h"
 #include "font.h"
-#include "img.h"
 #include "model.h"
-#include "net.h"
+#include "nettask.h"
 #include "power.h"
 #include "render.h"
 #include "timekeeper.h"
@@ -28,8 +27,7 @@ static bool hasModel = false;
 static AppStatus st;
 static String etag;
 static uint32_t lastMinute = 0;
-static int gTapX = -1, gTapY = -1;
-static int gWheelDir = 0;  // -1 = BtnA (up / prev tab), +1 = BtnC (down / next)
+static uint32_t gBodyUntil = 0;  // redraw maps when the current 2h slot ends
 
 static int readWheelDir() {
   bool up = M5.BtnA.wasPressed();
@@ -37,66 +35,6 @@ static int readWheelDir() {
   if (up && !down) return -1;
   if (down && !up) return 1;
   return 0;
-}
-
-static bool onNetYield() {
-  M5.update();
-  auto t = M5.Touch.getDetail();
-  if (t.wasClicked()) {
-    gTapX = t.x;
-    gTapY = t.y;
-    return true;
-  }
-  int d = readWheelDir();
-  if (d) {
-    gWheelDir = d;
-    return true;
-  }
-  return false;
-}
-
-static void scheduleNextFetch(bool ok) {
-  uint32_t now = nowEpoch();
-  if (ok) {
-    // next hourly refresh shortly after splatoon3.ink publishes (~:10-:20)
-    struct tm lt;
-    time_t t = now;
-    localtime_r(&t, &lt);
-    uint32_t dayStart = now - (lt.tm_hour * 3600 + lt.tm_min * 60 + lt.tm_sec);
-    uint32_t next = dayStart + 3600 * (lt.tm_hour + 1) + 60 * kFetchAtMinute;
-    if (next <= now) next += 3600;
-    st.nextFetch = next;
-  } else {
-    st.nextFetch = now + kRetrySecs;
-  }
-}
-
-static bool fetchCompact() {
-  String body;
-  String newEtag;
-  int code = httpsGet(kApiHost, kCompactPath, etag.c_str(), body, newEtag);
-  Serial.printf("[app] fetch code=%d len=%u\n", code, (unsigned)body.length());
-  if (code == 304) {
-    st.offline = false;
-    st.lastFetchOk = nowEpoch();
-    scheduleNextFetch(true);
-    return true;  // unchanged
-  }
-  if (code != 200 || body.length() < 16) return false;
-
-  // Model is ~16KB; keep the scratch copy in BSS so we don't blow the loop stack
-  // (and so a failed parse cannot clobber the on-screen model).
-  static Model incoming;
-  if (!modelParse(incoming, body.c_str(), body.length())) return false;
-  model = incoming;
-  hasModel = true;
-  etag = newEtag;
-  cacheSaveCompact(body.c_str(), body.length(), newEtag.c_str());
-  st.offline = false;
-  st.lastFetchOk = nowEpoch();
-  scheduleNextFetch(true);
-  imgQueue(model);
-  return true;
 }
 
 static void loadCacheIfEmpty() {
@@ -124,46 +62,61 @@ static void paint(bool quality = true) {
     st.wifiSsid[0] = 0;
     st.noWifiConfig = true;
   }
+  StateHold hold;
   st.page = render::clampPage(model, st.page);
   render::drawPage(model, st, quality);
+  gBodyUntil = model.nextChangeAt(nowEpoch());
 }
 
 static void goPage(int page) {
-  st.page = render::clampPage(model, page);
+  st.page = page;
   st.about = false;
   paint(true);
 }
 
 static void goNeighbor(int dir) {
   if (!dir) return;
-  goPage(render::neighborPage(model, st.page, dir));
+  int next;
+  {
+    StateHold hold;
+    next = render::neighborPage(model, st.page, dir);
+  }
+  goPage(next);
 }
 
 // ------------------------------------------------------------------ touch --
 
 static void handleTap(int x, int y) {
-  int tab = render::footerPageAt(x, y, model);
+  int tab;
+  {
+    StateHold hold;
+    tab = render::footerPageAt(x, y, model);
+  }
   if (tab >= 0) {
     goPage(tab);
     return;
   }
   if (y < render::kHeaderH && x > render::kW - 90) {
+    netPause(true);
     if (wifiuiRun(cfg)) {
       Serial.println("[app] wifi saved from UI, rebooting");
       delay(300);
       ESP.restart();
     }
+    netPause(false);
     paint();
     return;
   }
   if (st.page == render::kPageSettings) {
     int hit = render::settingsHit(x, y, st.about);
     if (hit == 1) {
+      netPause(true);
       if (wifiuiRun(cfg)) {
         Serial.println("[app] wifi saved from UI, rebooting");
         delay(300);
         ESP.restart();
       }
+      netPause(false);
       paint();
     } else if (hit == 2) {
       st.about = true;
@@ -174,8 +127,10 @@ static void handleTap(int x, int y) {
     }
     return;
   }
-  if (x < 90) goPage(render::neighborPage(model, st.page, -1));
-  else if (x > render::kW - 90) goPage(render::neighborPage(model, st.page, 1));
+  int dir = 0;
+  if (x < 90) dir = -1;
+  else if (x > render::kW - 90) dir = 1;
+  if (dir) goNeighbor(dir);
 }
 
 // ----------------------------------------------------------------- serial --
@@ -199,7 +154,7 @@ static void handleSerial() {
           Serial.println("usage: wifi SSID PASSWORD");
         }
       } else if (line == "refetch") {
-        st.nextFetch = 0;
+        netRequestFetch();
       } else if (line.startsWith("autofetch ")) {
         bool on = line.substring(10) == "1";
         cfg.setAutoFetch(on);
@@ -209,6 +164,7 @@ static void handleSerial() {
         render::dumpCanvas();
         Serial.println("[app] dump canvas done");
       } else if (line == "dumpcache") {
+        FsHold hold;
         File f = LittleFS.open("/compact.json", "r");
         if (f) {
           Serial.printf("[app] cache size=%u\n", (unsigned)f.size());
@@ -220,7 +176,15 @@ static void handleSerial() {
           Serial.println("[app] no cache");
         }
       } else if (line == "sleep") {
-        powerEnterTouchSleep();
+        powerEnterSleep();
+        paint();
+      } else if (line == "sleepview") {
+        M5Canvas* c = render::canvas();
+        if (c) {
+          powerDrawSleepHint(*c);
+          M5.Display.setEpdMode(epd_mode_t::epd_quality);
+          c->pushSprite(0, 0);
+        }
       } else if (line.startsWith("page ")) {
         goPage(line.substring(5).toInt());
       } else if (line == "about") {
@@ -228,16 +192,19 @@ static void handleSerial() {
         st.about = true;
         paint();
       } else if (line == "guide") {
+        netPause(true);
         wifiuiRun(cfg, true);
+        netPause(false);
         paint();
       } else if (line == "status") {
+        StateHold hold;
         Serial.printf("page=%d wifi=%d offline=%d hasModel=%d gen=%lu nf=%lu modes=%d events=%d shifts=%d egg=%d gear=%d\n",
                       st.page, st.wifiOk, st.offline, hasModel,
                       (unsigned long)model.gen, (unsigned long)model.nf,
                       model.nModes, model.nEvents, model.nShifts,
                       model.nEggstra, model.nGear);
       } else {
-        Serial.println("cmds: wifi SSID PASS | refetch | page N | sleep | status | autofetch 0/1 | shot | dumpcache");
+        Serial.println("cmds: wifi SSID PASS | refetch | page N | sleep | sleepview | status | autofetch 0/1 | shot | dumpcache");
       }
       line = "";
     } else if (line.length() < 128) {
@@ -253,7 +220,6 @@ void setup() {
   m5cfg.serial_baudrate = 115200;
   M5.begin(m5cfg);
   M5.Power.begin();
-  netSetYield(onNetYield);
   Serial.println("\n[app] splatoon3 m5paper boot");
   Serial.printf("[app] heap=%u free, psram=%u free, loopstack-hwm=%u model=%u\n",
                 ESP.getFreeHeap(), (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
@@ -284,90 +250,61 @@ void setup() {
   }
 
   loadCacheIfEmpty();
-  if (!cfg.wifiConfigured()) {
-    st.noWifiConfig = true;
-    paint();
-    Serial.println("[app] no wifi; open 设置 or send: wifi SSID PASSWORD");
-    return;
-  }
-
+  if (!cfg.wifiConfigured()) st.noWifiConfig = true;
   paint();
-  st.wifiOk = wifiConnect(cfg.ssid(), cfg.password(), 15000);
-  if (st.wifiOk && cfg.autoFetch()) {
-    st.timeOk = timeSyncNtp(12000);
-    st.battery = powerBatteryPercent();
-    if (fetchCompact()) {
-      paint();
-    } else {
-      st.offline = true;
-      loadCacheIfEmpty();
-      paint();
-      scheduleNextFetch(false);
-    }
-  } else {
-    if (!st.wifiOk) st.offline = true;
-    paint();
-    if (hasModel) scheduleNextFetch(false);
-  }
+  if (cfg.wifiConfigured()) netRequestFetch();
+  netTaskStart(cfg, model, hasModel, st, etag);
+  if (!cfg.wifiConfigured())
+    Serial.println("[app] no wifi; open 设置 or send: wifi SSID PASSWORD");
 }
 
 void loop() {
   M5.update();
   handleSerial();
 
-  if (gTapX >= 0) {
-    int x = gTapX, y = gTapY;
-    gTapX = gTapY = -1;
-    handleTap(x, y);
-  } else if (gWheelDir != 0) {
-    int d = gWheelDir;
-    gWheelDir = 0;
-    goNeighbor(d);
-  } else {
-    auto t = M5.Touch.getDetail();
-    if (t.wasClicked()) handleTap(t.x, t.y);
-    else goNeighbor(readWheelDir());
+  if (M5.BtnB.wasPressed()) {
+    static uint32_t lastClick = 0;
+    uint32_t t = millis();
+    if (lastClick && t - lastClick < 500) {
+      lastClick = 0;
+      Serial.println("[app] wheel double-click → sleep");
+      powerEnterSleep();
+      paint();
+    } else {
+      lastClick = t;
+    }
   }
+
+  auto t = M5.Touch.getDetail();
+  if (t.wasClicked()) handleTap(t.x, t.y);
+  else goNeighbor(readWheelDir());
 
   uint32_t now = nowEpoch();
   uint32_t minute = now / 60;
   if (minute != lastMinute && timeValid()) {
     lastMinute = minute;
-    render::refreshHeader(model, st);
     st.battery = powerBatteryPercent();
-  }
-
-  if (cfg.wifiConfigured() && cfg.autoFetch() && now >= st.nextFetch) {
-    static uint32_t lastAttempt = 0;
-    if (now - lastAttempt >= 30) {  // simple in-flight guard
-      lastAttempt = now;
-      if (!st.wifiOk) st.wifiOk = wifiConnect(cfg.ssid(), cfg.password(), 12000);
-      bool ok = st.wifiOk && fetchCompact();
-      if (!ok) {
-        st.offline = true;
-        scheduleNextFetch(false);
-      } else if (!st.timeOk) {
-        st.timeOk = timeSyncNtp(8000);
-      }
-      paint(true);
+    if (gBodyUntil && now >= gBodyUntil) {
+      paint(true);  // 18:00-20:00 → 20:00-22:00 without waiting for fetch
+    } else {
+      StateHold hold;
+      render::refreshHeader(model, st);
     }
   }
 
-  if (hasModel && st.wifiOk && gTapX < 0 && gWheelDir == 0) {
-    imgPump();
-    if (gTapX >= 0) {
-      int x = gTapX, y = gTapY;
-      gTapX = gTapY = -1;
-      handleTap(x, y);
-    } else if (gWheelDir != 0) {
-      int d = gWheelDir;
-      gWheelDir = 0;
-      goNeighbor(d);
-    } else if (imgJustFinished()) {
-      paint(false);  // image arrivals: fast refresh, don't block the tab bar
-    }
+  NetEvt ev;
+  bool full = false, fast = false, head = false;
+  while (netPollEvent(ev)) {
+    if (ev == kNetEvtFetchOk || ev == kNetEvtFetchFail) full = true;
+    else if (ev == kNetEvtImg) fast = true;
+    else if (ev == kNetEvtWifi || ev == kNetEvtNtp) head = true;
+  }
+  if (full) paint(true);
+  else if (fast) paint(false);
+  else if (head) {
+    StateHold hold;
+    render::refreshHeader(model, st);
   }
 
-  wifiKeepAlive();
   delay(20);
 }

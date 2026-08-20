@@ -4,6 +4,8 @@
 #include <LittleFS.h>
 #include <string.h>
 
+#include "buddy_sni.h"
+#include "cache.h"
 #include "config.h"
 #include "net.h"
 
@@ -21,39 +23,49 @@ static bool keyOk(const char* key) {
   return true;
 }
 
+static bool parseSniBuf(uint8_t* buf, size_t sz, uint16_t& w, uint16_t& h, uint8_t*& pix,
+                        size_t& pixLen) {
+  if (sz < 10 || memcmp(buf, "SNI1", 4) != 0) return false;
+  memcpy(&w, buf + 4, 2);
+  memcpy(&h, buf + 6, 2);
+  if (w == 0 || h == 0 || w > 540 || h > 960) return false;
+  pix = buf + 8;
+  pixLen = sz - 8;
+  return true;
+}
+
 static bool loadSni(const char* key, uint16_t& w, uint16_t& h, uint8_t*& pix, size_t& pixLen) {
   pix = nullptr;
   char path[96];
   fsName(key, path, sizeof(path));
-  if (!LittleFS.exists(path)) return false;
-  File f = LittleFS.open(path, "r");
-  if (!f) return false;
-  size_t sz = f.size();
-  if (sz < 10 || sz > 80000) {
-    f.close();
-    return false;
+  {
+    FsHold hold;
+    if (LittleFS.exists(path)) {
+      File f = LittleFS.open(path, "r");
+      if (f) {
+        size_t sz = f.size();
+        if (sz >= 10 && sz <= 80000) {
+          uint8_t* buf = (uint8_t*)ps_malloc(sz);
+          if (!buf) buf = (uint8_t*)malloc(sz);
+          if (buf && f.read(buf, sz) == sz && parseSniBuf(buf, sz, w, h, pix, pixLen)) {
+            f.close();
+            return true;
+          }
+          free(buf);
+        }
+        f.close();
+      }
+    }
   }
-  uint8_t* buf = (uint8_t*)ps_malloc(sz);
-  if (!buf) buf = (uint8_t*)malloc(sz);
-  if (!buf) {
-    f.close();
-    return false;
-  }
-  if (f.read(buf, sz) != sz || memcmp(buf, "SNI1", 4) != 0) {
-    f.close();
+  if (strcmp(key, kBuddyKey) != 0) return false;
+  uint8_t* buf = (uint8_t*)ps_malloc(kBuddySniLen);
+  if (!buf) buf = (uint8_t*)malloc(kBuddySniLen);
+  if (!buf) return false;
+  memcpy(buf, kBuddySni, kBuddySniLen);
+  if (!parseSniBuf(buf, kBuddySniLen, w, h, pix, pixLen)) {
     free(buf);
     return false;
   }
-  f.close();
-  memcpy(&w, buf + 4, 2);
-  memcpy(&h, buf + 6, 2);
-  if (w == 0 || h == 0 || w > 540 || h > 400) {
-    free(buf);
-    return false;
-  }
-  pix = buf + 8;
-  pixLen = sz - 8;
-  // caller frees buf, not pix — return base via pix-8
   return true;
 }
 
@@ -114,12 +126,39 @@ bool imgDraw(M5Canvas* dst, int x, int y, const char* key) {
   return true;
 }
 
+bool imgDrawContain(M5Canvas* dst, int x, int y, int boxW, int boxH, const char* key) {
+  if (!dst || !keyOk(key) || boxW <= 0 || boxH <= 0) return false;
+  uint16_t sw, sh;
+  uint8_t* pix;
+  size_t pixLen;
+  if (!loadSni(key, sw, sh, pix, pixLen)) return false;
+  uint8_t* base = pix - 8;
+  int dw, dh;
+  if ((int32_t)boxW * sh < (int32_t)boxH * sw) {
+    dw = boxW;
+    dh = (int)((int32_t)boxW * sh / sw);
+    if (dh < 1) dh = 1;
+  } else {
+    dh = boxH;
+    dw = (int)((int32_t)boxH * sw / sh);
+    if (dw < 1) dw = 1;
+  }
+  int ox = x + (boxW - dw) / 2;
+  int oy = y + (boxH - dh) / 2;
+  blit(dst, ox, oy, dw, dh, pix, sw, sh, pixLen);
+  free(base);
+  return true;
+}
+
 int imgPrefetchKey(const char* key) {
   if (!keyOk(key) || !wifiConnected()) return -1;
   char path[96];
   fsName(key, path, sizeof(path));
-  if (LittleFS.exists(path)) return 200;
-  if (!LittleFS.exists("/img")) LittleFS.mkdir("/img");
+  {
+    FsHold hold;
+    if (LittleFS.exists(path)) return 200;
+    if (!LittleFS.exists("/img")) LittleFS.mkdir("/img");
+  }
   char enc[96];
   size_t n = 0;
   for (const char* p = key; *p && n + 4 < sizeof(enc); ++p) {
@@ -135,7 +174,10 @@ int imgPrefetchKey(const char* key) {
   snprintf(urlpath, sizeof(urlpath), "/api/v1/img?k=%s", enc);
   int code = httpsGetToFile(kApiHost, urlpath, path);
   Serial.printf("[img] %s -> %d\n", key, code);
-  if (code != 200) LittleFS.remove(path);
+  if (code != 200) {
+    FsHold hold;
+    LittleFS.remove(path);
+  }
   return code;
 }
 
@@ -170,7 +212,6 @@ void imgQueue(const Model& m) {
     addKey(gQueue, gQn, 64, m.events[i].si1);
     addKey(gQueue, gQn, 64, m.events[i].si2);
   }
-  addKey(gQueue, gQn, 64, kBuddyKey);
   // Then one upcoming slot per mode, then remaining salmon.
   for (int i = 0; i < m.nModes; i++) {
     if (m.modes[i].nu > 0) addSlot(gQueue, gQn, 64, m.modes[i].u[0]);
@@ -189,12 +230,14 @@ bool imgPump() {
     const char* k = gQueue[gQi];
     char path[32];
     fsName(k, path, sizeof(path));
-    if (LittleFS.exists(path)) {
-      ++gQi;
-      continue;
+    {
+      FsHold hold;
+      if (LittleFS.exists(path)) {
+        ++gQi;
+        continue;
+      }
     }
     int code = imgPrefetchKey(k);
-    if (code == kNetAbort) return true;  // retry this key after the tap
     ++gQi;
     if (code == 200) gNeedPaint = true;
     return gQi < gQn;

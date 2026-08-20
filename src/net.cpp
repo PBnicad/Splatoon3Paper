@@ -7,6 +7,10 @@
 #include <mbedtls/ssl.h>
 #include "ssl_client.h"
 
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+
+#include "cache.h"
 #include "certs.h"
 
 // Arduino-ESP32 2.x WiFiClientSecure::read() returns -1 when available()==0,
@@ -71,12 +75,6 @@ void wifiKeepAlive() {
   }
 }
 
-static NetYieldFn gYield = nullptr;
-
-void netSetYield(NetYieldFn fn) { gYield = fn; }
-
-static bool yieldAbort() { return gYield && gYield(); }
-
 static bool readHttpBody(HTTPClient& http, String& body, uint32_t timeoutMs) {
   int len = http.getSize();
   WiFiClient* stream = http.getStreamPtr();
@@ -108,7 +106,7 @@ static bool readHttpBody(HTTPClient& http, String& body, uint32_t timeoutMs) {
       continue;
     }
     if (len <= 0) break;
-    delay(2);
+    vTaskDelay(1);
   }
   return body.length() > 0;
 }
@@ -182,49 +180,52 @@ int httpsGetToFile(const char* host, const char* path, const char* fsPath) {
       continue;
     }
     WiFiClient* stream = http.getStreamPtr();
-    File f = LittleFS.open(fsPath, "w");
-    if (!f || !stream) {
+    if (!stream) {
       http.end();
-      if (f) f.close();
       return -2;
+    }
+    File f;
+    {
+      FsHold hold;
+      f = LittleFS.open(fsPath, "w");
+      if (!f) {
+        http.end();
+        return -2;
+      }
     }
     uint32_t t0 = millis();
     uint32_t last = t0;
     int got = 0;
     uint8_t buf[1024];
-    bool aborted = false;
     while (sz <= 0 || got < sz) {
-      if (yieldAbort()) {
-        aborted = true;
-        break;
-      }
       if (millis() - t0 > 25000) break;
       if (millis() - last > 8000) break;
       int nwant = (int)sizeof(buf);
       if (sz > 0 && got + nwant > sz) nwant = sz - got;
       int n = stream->read(buf, nwant);
       if (n > 0) {
+        FsHold hold;
         f.write(buf, n);
         got += n;
         last = millis();
         continue;
       }
       if (sz <= 0) break;
-      delay(5);
+      vTaskDelay(1);
     }
-    f.close();
+    {
+      FsHold hold;
+      f.close();
+    }
     http.end();
-    if (aborted) {
-      LittleFS.remove(fsPath);
-      Serial.println("[net] file abort");
-      return kNetAbort;
-    }
     if (sz > 0 && got != sz) {
+      FsHold hold;
       LittleFS.remove(fsPath);
       Serial.printf("[net] file short %d/%d\n", got, sz);
       continue;
     }
     if (got < 8) {
+      FsHold hold;
       LittleFS.remove(fsPath);
       continue;
     }

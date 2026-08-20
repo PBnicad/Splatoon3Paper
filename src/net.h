@@ -15,12 +15,8 @@ void wifiKeepAlive();
 // negative HTTPClient error code on transport failure.
 int httpsGet(const char* host, const char* path, const char* etagIn,
              String& body, String& etagOut);
-// Called from the HTTP read loop so the UI can stay responsive. Return true
-// to abort the current transfer.
-typedef bool (*NetYieldFn)();
-void netSetYield(NetYieldFn fn);
-constexpr int kNetAbort = -3;
 
-// Binary GET streamed to LittleFS. Returns HTTP status, kNetAbort, or a
-// negative transport error.
+// Binary GET streamed to LittleFS. Returns HTTP status or a negative
+// transport error. Yields the calling task while waiting on the socket so
+// the UI task can keep running.
 int httpsGetToFile(const char* host, const char* path, const char* fsPath);

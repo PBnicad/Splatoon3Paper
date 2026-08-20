@@ -31,7 +31,7 @@ constexpr int kPageSalmon = 5;
 constexpr int kPageGear = 6;
 constexpr int kPageSettings = 7;
 constexpr int kW = 540, kH = 960;
-constexpr int kHeaderH = 52;
+constexpr int kHeaderH = 76;
 constexpr int kFooterH = 56;
 
 bool begin();                                   // canvas + fonts
@@ -50,5 +50,5 @@ bool festBattleActive(const Model& m);
 
 }  // namespace render
 
-// draws the touch-wake hint onto a black canvas (used by power module)
+// draws the little-buddy sleep screen onto a white canvas (used by power module)
 bool powerDrawSleepHint(M5Canvas& c);

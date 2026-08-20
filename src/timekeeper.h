@@ -14,6 +14,7 @@ bool timeSyncNtp(uint32_t timeoutMs);
 void timeSeedFromRtc();
 
 void fmtClock(uint32_t epoch, char* out, size_t n);        // "12:34"
+void fmtDateWeek(uint32_t epoch, char* out, size_t n);     // "8月20日 周四"
 void fmtHM(uint32_t epoch, char* out, size_t n);           // "8/21 08:00"
 void fmtRange(uint32_t st, uint32_t et, char* out, size_t n);  // "08:00-10:00" (同日) / "8/21 08:00-8/23 00:00"
 void fmtCountdown(uint32_t secsLeft, char* out, size_t n); // "2天3小时" / "45分" / "12秒"

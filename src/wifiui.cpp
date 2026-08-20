@@ -65,18 +65,18 @@ void drawKb(M5Canvas& c, int y0) {
       if (gShift && t[0] >= 'a' && t[0] <= 'z') t[0] = (char)(t[0] - 32);
       int x = i * cw;
       c.drawRoundRect(x + 3, y, cw - 6, 48, 4, C_MID);
-      font24.draw(&c, x + cw / 2 - 6, y + 10, t, C_BLACK, C_WHITE);
+      font24.draw(&c, x + cw / 2 - 6, y + 9, t, C_BLACK, C_WHITE);
     }
   }
   int y = y0 + 8 + 4 * 56;
   c.fillRoundRect(12, y, 90, 52, 4, C_LIGHT);
-  font24.draw(&c, 28, y + 12, "Aa", C_BLACK, C_LIGHT);
+  font24.draw(&c, 28, y + 11, "Aa", C_BLACK, C_LIGHT);
   c.fillRoundRect(114, y, 220, 52, 4, C_LIGHT);
-  font24.draw(&c, 186, y + 12, "空格", C_BLACK, C_LIGHT);
+  font24.draw(&c, 186, y + 11, "空格", C_BLACK, C_LIGHT);
   c.fillRoundRect(346, y, 80, 52, 4, C_LIGHT);
-  font24.draw(&c, 366, y + 12, "删", C_BLACK, C_LIGHT);
+  font24.draw(&c, 366, y + 11, "删", C_BLACK, C_LIGHT);
   c.fillRoundRect(438, y, 90, 52, 4, C_BLACK);
-  font24.draw(&c, 454, y + 12, ui::Connect, C_WHITE, C_BLACK);
+  font24.draw(&c, 454, y + 11, ui::Connect, C_WHITE, C_BLACK);
 }
 
 void drawWelcome(M5Canvas& c) {
@@ -88,9 +88,9 @@ void drawWelcome(M5Canvas& c) {
   font24.draw(&c, 36, 304, ui::WelcomeBody2, C_DARK, C_WHITE);
   font24.draw(&c, 36, 348, ui::WelcomeBody3, C_DARK, C_WHITE);
 
-  c.fillRoundRect(36, 680, kW - 72, 88, 8, C_BLACK);
+  c.fillRoundRect(36, 672, kW - 72, 96, 8, C_BLACK);
   int tw = font40.textWidth(ui::StartWifi);
-  font40.draw(&c, (kW - tw) / 2, 700, ui::StartWifi, C_WHITE, C_BLACK);
+  font40.draw(&c, (kW - tw) / 2, 672 + 25, ui::StartWifi, C_WHITE, C_BLACK);
 
   int lw = font24.textWidth(ui::Later);
   font24.draw(&c, (kW - lw) / 2, 800, ui::Later, C_MID, C_WHITE);
@@ -110,7 +110,7 @@ void drawList(M5Canvas& c) {
   font24.draw(&c, kW - 24 - font24.textWidth(ui::Refresh), 18, ui::Refresh, C_DARK,
               C_WHITE);
   font40.draw(&c, 24, 64, ui::PickWifi, C_BLACK, C_WHITE);
-  font24.draw(&c, 24, 122, "点选网络，下一步输入密码", C_GRAY, C_WHITE);
+  font24.draw(&c, 24, 64 + 46 + 12, "点选网络，下一步输入密码", C_GRAY, C_WHITE);
 
   int y = 168;
   for (int i = 0; i < gN && i < 10; i++) {
@@ -133,9 +133,9 @@ void drawPass(M5Canvas& c) {
   font24.draw(&c, 24, 16, ui::Back, C_DARK, C_WHITE);
   font40.drawEllipsis(&c, 24, 56, gSel >= 0 ? gNets[gSel].ssid : "", C_BLACK, C_WHITE,
                       kW - 48);
-  c.drawRoundRect(16, 118, kW - 32, 52, 4, C_MID);
-  if (gPassLen == 0) font24.draw(&c, 32, 132, ui::EnterPass, C_MID, C_WHITE);
-  else font24.drawEllipsis(&c, 32, 132, gPass, C_BLACK, C_WHITE, kW - 80);
+  c.drawRoundRect(16, 118, kW - 32, 56, 4, C_MID);
+  if (gPassLen == 0) font24.draw(&c, 32, 131, ui::EnterPass, C_MID, C_WHITE);
+  else font24.drawEllipsis(&c, 32, 131, gPass, C_BLACK, C_WHITE, kW - 80);
   drawKb(c, 188);
   fullPush(c);
 }
@@ -143,7 +143,7 @@ void drawPass(M5Canvas& c) {
 void drawFail(M5Canvas& c) {
   c.fillSprite(C_WHITE);
   font40.draw(&c, 36, 200, ui::ConnectFail, C_BLACK, C_WHITE);
-  font24.draw(&c, 36, 270, ui::CheckPass, C_DARK, C_WHITE);
+  font24.draw(&c, 36, 200 + 46 + 16, ui::CheckPass, C_DARK, C_WHITE);
   if (gSel >= 0)
     font24.drawEllipsis(&c, 36, 316, gNets[gSel].ssid, C_GRAY, C_WHITE, kW - 72);
 
@@ -233,7 +233,7 @@ bool tryConnect(M5Canvas& c, Config& cfg) {
   cfg.setWifi(gNets[gSel].ssid, pass);
   c.fillSprite(C_WHITE);
   font40.draw(&c, 36, 360, ui::Connecting, C_BLACK, C_WHITE);
-  font24.drawEllipsis(&c, 36, 430, gNets[gSel].ssid, C_DARK, C_WHITE, kW - 72);
+  font24.drawEllipsis(&c, 36, 360 + 46 + 16, gNets[gSel].ssid, C_DARK, C_WHITE, kW - 72);
   fullPush(c);
   WiFi.disconnect(false, false);
   delay(200);

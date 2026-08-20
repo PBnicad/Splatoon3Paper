@@ -20,6 +20,9 @@ struct ModeSlots {
   Slot a;
   Slot u[12];
   int nu = 0;
+  // Compact JSON freezes "a" at fetch time. Use this so the panel can
+  // roll to the next 2h slot without waiting for another download.
+  const Slot* slotAt(uint32_t now) const;
 };
 
 struct Period { uint32_t st, et; };
@@ -101,6 +104,9 @@ struct Model {
   bool hasMonthly = false;
 
   const ModeSlots* findMode(const char* key) const;
+  int liveShiftIndex(uint32_t now) const;
+  // Earliest time the on-screen current slot (or next start) changes.
+  uint32_t nextChangeAt(uint32_t now) const;
 };
 
 // Parse compact JSON (buffer may be in PSRAM). Returns false on hard error.

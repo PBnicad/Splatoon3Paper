@@ -4,5 +4,5 @@
 
 // -1 when unknown
 int powerBatteryPercent();
-// Draw the sleep hint on screen, then deep sleep until touch.
-void powerEnterTouchSleep();
+// Buddy screen, radios off, light-sleep until the wheel is double-clicked.
+void powerEnterSleep();

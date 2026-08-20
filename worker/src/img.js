@@ -10,10 +10,23 @@ export const IMG_SIZE = {
   s: [248, 124],
   w: [64, 64],
   g: [72, 72],
-  b: [168, 168],
+  b: [320, 320],  // max box; buddy is contained (original aspect), not cover-cropped
 };
 
-const KEY_RE = /^([swgb]):([0-9a-f]{64}_[01]|buddy)$/i;
+const KEY_RE = /^([swgb]):([0-9a-f]{64}_[01]|buddy2?)$/i;
+
+/** Uniform scale so (sw,sh) fits inside (maxW,maxH). Never stretches. */
+export function containSize(sw, sh, maxW, maxH) {
+  if (sw <= 0 || sh <= 0 || maxW <= 0 || maxH <= 0) return [1, 1];
+  if (sw * maxH > sh * maxW) {
+    const dw = maxW;
+    const dh = Math.max(1, Math.round((maxW * sh) / sw));
+    return [dw, dh];
+  }
+  const dh = maxH;
+  const dw = Math.max(1, Math.round((maxH * sw) / sh));
+  return [dw, dh];
+}
 
 export function parseImgKey(k) {
   if (typeof k !== "string") return null;
@@ -99,16 +112,15 @@ export function encodeSni1(gray, w, h) {
   return buf;
 }
 
-export async function compressPngToSni(pngBytes, dw, dh) {
+export async function compressPngToSni(pngBytes, dw, dh, { cover = true } = {}) {
   const { w, h, rgba } = await decodePng(pngBytes);
-  const gray = resizeGray(rgba, w, h, dw, dh, { cover: true });
+  const gray = resizeGray(rgba, w, h, dw, dh, { cover });
   return encodeSni1(gray, dw, dh);
 }
 
 export async function fetchAndCompress(key) {
   const parsed = parseImgKey(key);
   if (!parsed) throw new Error("bad key");
-  const [dw, dh] = IMG_SIZE[parsed.kind];
   const url = parsed.kind === "b" ? buddyUrl() : assetPngUrl(parsed.kind, parsed.file);
   const res = await fetch(url, {
     method: "GET",
@@ -122,5 +134,12 @@ export async function fetchAndCompress(key) {
   if (!res.ok) throw new Error(`asset ${res.status}`);
   const png = new Uint8Array(await res.arrayBuffer());
   if (png.length > 800000) throw new Error("asset too large");
+  if (parsed.kind === "b") {
+    const { w, h, rgba } = await decodePng(png);
+    const [dw, dh] = containSize(w, h, IMG_SIZE.b[0], IMG_SIZE.b[1]);
+    const gray = resizeGray(rgba, w, h, dw, dh);
+    return encodeSni1(gray, dw, dh);
+  }
+  const [dw, dh] = IMG_SIZE[parsed.kind];
   return compressPngToSni(png, dw, dh);
 }

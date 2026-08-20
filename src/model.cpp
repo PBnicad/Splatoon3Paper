@@ -90,6 +90,49 @@ const ModeSlots* Model::findMode(const char* key) const {
   return nullptr;
 }
 
+static bool slotLive(const Slot& s, uint32_t now) {
+  return s.st && s.st <= now && now < s.et;
+}
+
+const Slot* ModeSlots::slotAt(uint32_t now) const {
+  if (hasA && slotLive(a, now)) return &a;
+  for (int i = 0; i < nu; ++i)
+    if (slotLive(u[i], now)) return &u[i];
+  return nullptr;
+}
+
+int Model::liveShiftIndex(uint32_t now) const {
+  for (int i = 0; i < nShifts; ++i)
+    if (shifts[i].et > now) return i;
+  return -1;
+}
+
+uint32_t Model::nextChangeAt(uint32_t now) const {
+  uint32_t t = 0;
+  auto bump = [&](uint32_t x) {
+    if (x > now && (t == 0 || x < t)) t = x;
+  };
+  for (int i = 0; i < nModes; ++i) {
+    const Slot* s = modes[i].slotAt(now);
+    if (s) {
+      bump(s->et);
+      continue;
+    }
+    if (modes[i].hasA && modes[i].a.st > now) bump(modes[i].a.st);
+    for (int k = 0; k < modes[i].nu; ++k)
+      if (modes[i].u[k].st > now) {
+        bump(modes[i].u[k].st);
+        break;
+      }
+  }
+  int si = liveShiftIndex(now);
+  if (si >= 0) {
+    if (shifts[si].st <= now) bump(shifts[si].et);
+    else bump(shifts[si].st);
+  }
+  return t;
+}
+
 bool modelParse(Model& m, const char* json, size_t len) {
   memset(&m, 0, sizeof(m));
   // Keep the document in internal RAM. PSRAM-backed JsonDocument on ESP32

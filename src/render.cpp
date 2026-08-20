@@ -25,6 +25,12 @@ enum : uint8_t {
   C_WHITE = 15,
 };
 
+// SNF1 CJK ink extends below the em box (font24 max yoff+h = 30, font40 = 46).
+constexpr int kInk24 = 30;
+constexpr int kInk40 = 46;
+constexpr int kLine24 = kInk24 + 6;  // 36: line box + gap so descenders never collide
+constexpr int kTeamRow = kInk24 + 14;
+
 static void pushFull(bool quality) {
   // Page turns and data redraws use GC16 full-frame refresh to clear ghosts.
   // Minute header ticks keep epd_fastest via refreshHeader().
@@ -55,7 +61,7 @@ M5Canvas* canvas() { return &page; }
 void showStatus(const char* line1, const char* line2) {
   page.fillSprite(C_WHITE);
   font40.draw(&page, 24, 380, line1, C_BLACK, C_WHITE);
-  if (line2) font24.draw(&page, 24, 470, line2, C_GRAY, C_WHITE);
+  if (line2) font24.draw(&page, 24, 380 + kInk40 + 16, line2, C_GRAY, C_WHITE);
   pushFull(true);
 }
 
@@ -119,19 +125,25 @@ static void drawHeaderInto(M5Canvas* c, const Model& m, const AppStatus& st) {
   (void)m;
   c->fillRect(0, 0, kW, kHeaderH, C_WHITE);
   if (timeValid()) {
-    char buf[8];
-    fmtClock(nowEpoch(), buf, sizeof(buf));
-    font40.draw(c, 16, 4, buf, C_BLACK, C_WHITE);
+    char date[32], clock[8];
+    uint32_t t = nowEpoch();
+    fmtDateWeek(t, date, sizeof(date));
+    fmtClock(t, clock, sizeof(clock));
+    font24.draw(c, 16, 4, date, C_DARK, C_WHITE);
+    font24.draw(c, 16, 4 + kInk24 + 4, clock, C_BLACK, C_WHITE);
   }
+  const int iconY = (kHeaderH - 14) / 2;
   int rx = kW - 16;
-  drawBattery(c, rx - 29, 18, st.battery);
+  drawBattery(c, rx - 29, iconY, st.battery);
   rx -= 44;
-  drawWifi(c, rx - 16, 18, st.wifiOk, st.offline);
+  drawWifi(c, rx - 16, iconY, st.wifiOk, st.offline);
   rx -= 28;
   if (st.offline || st.noWifiConfig) {
     const char* tag = st.noWifiConfig ? ui::NoWifi : ui::Offline;
     int tw = font24.textWidth(tag);
-    font24.draw(c, rx - tw, 14, tag, C_BLACK, C_WHITE);
+    int ty = (kHeaderH - kInk24) / 2;
+    if (ty < 2) ty = 2;
+    font24.draw(c, rx - tw, ty, tag, C_BLACK, C_WHITE);
   }
   c->drawFastHLine(0, kHeaderH - 2, kW, C_MID);
 }
@@ -152,7 +164,31 @@ static void drawImgOrBox(int x, int y, int w, int h, const char* key) {
   }
 }
 
-// font24 ink box is ~30px (yoff+h), not the 24px em. Leave that much.
+constexpr int kTitleY = kHeaderH + 8;
+constexpr int kTitleLine = kTitleY + kInk24 + 8;
+constexpr int kContentY = kTitleLine + 10;
+constexpr int kMapW = 248;
+constexpr int kMapHNative = 124;
+constexpr int kMapGap = 8;
+constexpr int kSecH = kInk24 + 10;  // section label + gap before list
+
+static int slotCardH(int imgH) {
+  // pad + time/rule + gap + maps + gap + names + pad
+  return 8 + kInk24 + 10 + imgH + 8 + kInk24 + 10;
+}
+
+static int fitSlots(int y0, int imgH, int extraOverhead) {
+  int avail = kH - kFooterH - y0 - extraOverhead;
+  int h = slotCardH(imgH);
+  if (h <= 0) return 1;
+  int n = avail / h;
+  return n < 1 ? 1 : n;
+}
+
+static void drawPageTitle(const char* t) {
+  font24.draw(&page, 24, kTitleY, t, C_BLACK, C_WHITE);
+  page.drawFastHLine(0, kTitleLine, kW, C_MID);
+}
 
 static void drawFestTeams(int y, const Team* teams, int n);
 
@@ -231,9 +267,9 @@ static void drawFooter(const Model& m, int pageId) {
     int x = i * tw;
     int lw = font24.textWidth(names[i]);
     int tx = x + (tw - lw) / 2;
-    int ty = y + 6;  // raised; bar itself stays at the bottom
+    int ty = y + 8;  // raised; bar stays at the bottom. ink 30 → y+38 in 56px
     if (ids[i] == pageId) {
-      page.fillRect(x + 8, y + 3, tw - 16, 5, C_WHITE);
+      page.fillRect(x + 8, y + 3, tw - 16, 4, C_WHITE);
       font24.draw(&page, tx, ty, names[i], C_WHITE, C_BLACK);
     } else {
       font24.draw(&page, tx, ty, names[i], C_MID, C_BLACK);
@@ -243,86 +279,132 @@ static void drawFooter(const Model& m, int pageId) {
 
 // --------------------------------------------------------- battle schedules
 
-static int drawSlotList(const ModeSlots* mm, int y, int maxRows) {
+static int drawSlotList(const ModeSlots* mm, int y, int maxRows, int imgH) {
   if (!mm) return y;
+  int cardH = slotCardH(imgH);
   int shown = 0;
-  auto row = [&](const Slot& s, bool now) {
-    if (shown >= maxRows || y + 108 > kH - kFooterH) return;
+  auto row = [&](const Slot& s, bool nowRow) {
+    if (shown >= maxRows || y + cardH > kH - kFooterH) return;
     char range[32];
     fmtRange(s.st, s.et, range, sizeof(range));
-    uint8_t bg = now ? C_LIGHT : C_WHITE;
-    if (now) page.fillRoundRect(12, y, kW - 24, 102, 4, C_LIGHT);
-    font24.drawEllipsis(&page, 24, y + 4, range, C_BLACK, bg, 200);
-    font24.drawEllipsis(&page, 230, y + 4, s.rn, C_DARK, bg, 280);
-    drawImgOrBox(24, y + 34, 120, 60, s.si1);
-    drawImgOrBox(152, y + 34, 120, 60, s.si2);
-    font24.drawEllipsis(&page, 284, y + 40, s.s1, C_DARK, bg, 230);
-    font24.drawEllipsis(&page, 284, y + 70, s.s2, C_GRAY, bg, 230);
-    y += 106;
+    uint8_t bg = nowRow ? C_LIGHT : C_WHITE;
+    if (nowRow) page.fillRoundRect(12, y, kW - 24, cardH - 4, 4, C_LIGHT);
+    const int inset = nowRow ? 16 : 0;
+    const int left = 12 + inset;
+    const int right = kW - 12 - inset;
+    int mw = kMapW;
+    if (2 * mw + kMapGap > right - left) mw = (right - left - kMapGap) / 2;
+    int x1 = left;
+    int x2 = left + mw + kMapGap;
+    int tx = nowRow ? x1 : 24;
+    int rx = nowRow ? x2 : 260;
+    font24.drawEllipsis(&page, tx, y + 8, range, C_BLACK, bg, nowRow ? mw : 220);
+    font24.drawEllipsis(&page, rx, y + 8, s.rn, C_DARK, bg, nowRow ? mw : 250);
+    int iy = y + 8 + kInk24 + 10;
+    drawImgOrBox(x1, iy, mw, imgH, s.si1);
+    drawImgOrBox(x2, iy, mw, imgH, s.si2);
+    int ny = iy + imgH + 8;
+    font24.drawEllipsis(&page, x1, ny, s.s1, C_DARK, bg, mw);
+    font24.drawEllipsis(&page, x2, ny, s.s2, C_GRAY, bg, mw);
+    y += cardH;
     ++shown;
   };
-  if (mm->hasA) row(mm->a, true);
-  for (int i = 0; i < mm->nu && shown < maxRows; ++i) row(mm->u[i], false);
+  uint32_t now = nowEpoch();
+  const Slot* list[13];
+  int n = 0;
+  auto add = [&](const Slot& s) {
+    if (!s.st || s.et <= now) return;
+    for (int i = 0; i < n; ++i)
+      if (list[i]->st == s.st) return;
+    if (n < 13) list[n++] = &s;
+  };
+  if (mm->hasA) add(mm->a);
+  for (int i = 0; i < mm->nu; ++i) add(mm->u[i]);
+  for (int i = 0; i < n && shown < maxRows; ++i)
+    row(*list[i], list[i]->st <= now && now < list[i]->et);
   if (shown == 0) {
     font24.draw(&page, 24, y, ui::None, C_MID, C_WHITE);
-    y += 36;
+    y += kInk24 + 8;
   }
   return y;
 }
 
 static void drawBattlePage(const Model& m, const char* title, const char* label,
                            int pageId) {
-  font40.draw(&page, 24, 60, title, C_BLACK, C_WHITE);
-  page.drawFastHLine(0, 112, kW, C_MID);
+  drawPageTitle(title);
   const ModeSlots* mm = m.findMode(label);
+  int y = kContentY;
+  int imgH = kMapHNative;
+  int n = fitSlots(y, imgH, 0);
+  if (n < 2) {
+    imgH = 96;
+    n = fitSlots(y, imgH, 0);
+  }
   if (!mm || (!mm->hasA && mm->nu == 0)) {
-    font40.draw(&page, 24, 140, ui::None, C_MID, C_WHITE);
+    font24.draw(&page, 24, y, ui::None, C_MID, C_WHITE);
   } else {
-    drawSlotList(mm, 126, 7);
+    drawSlotList(mm, y, n, imgH);
   }
   drawFooter(m, pageId);
 }
 
+static void pickSplitGeom(int listY, int* imgH, int* nPer) {
+  int img = kMapHNative;
+  int n = fitSlots(listY, img, kSecH) / 2;
+  if (n < 2) {
+    int avail = kH - kFooterH - listY - kSecH;
+    int h = avail / 4;
+    img = h - (8 + kInk24 + 10 + 8 + kInk24 + 10);
+    if (img < 72) img = 72;
+    if (img > kMapHNative) img = kMapHNative;
+    n = 2;
+    if (fitSlots(listY, img, kSecH) / 2 < 2) n = 1;
+  }
+  *imgH = img;
+  *nPer = n < 1 ? 1 : n;
+}
+
 static void drawAnarchyPage(const Model& m) {
-  font40.draw(&page, 24, 60, ui::AnarchyTitle, C_BLACK, C_WHITE);
-  page.drawFastHLine(0, 112, kW, C_MID);
-  int y = 122;
+  drawPageTitle(ui::AnarchyTitle);
+  int y = kContentY;
   font24.draw(&page, 24, y, ui::ModeSeries, C_GRAY, C_WHITE);
-  y = drawSlotList(m.findMode(ui::ModeSeries), y + 30, 3);
-  y += 8;
+  int listY = y + kSecH;
+  int imgH, nPer;
+  pickSplitGeom(listY, &imgH, &nPer);
+  y = drawSlotList(m.findMode(ui::ModeSeries), listY, nPer, imgH);
   font24.draw(&page, 24, y, ui::ModeOpen, C_GRAY, C_WHITE);
-  drawSlotList(m.findMode(ui::ModeOpen), y + 30, 3);
+  drawSlotList(m.findMode(ui::ModeOpen), y + kSecH, nPer, imgH);
   drawFooter(m, kPageAnarchy);
 }
 
 static void drawFestPage(const Model& m) {
-  font40.draw(&page, 24, 60, ui::FestTitle, C_BLACK, C_WHITE);
-  page.drawFastHLine(0, 112, kW, C_MID);
-  int y = 122;
+  drawPageTitle(ui::FestTitle);
+  int y = kContentY;
   if (m.fest.present) {
     font24.drawEllipsis(&page, 24, y, m.fest.title, C_DARK, C_WHITE, kW - 48);
-    y += 32;
+    y += kInk24 + 8;
     drawFestTeams(y, m.fest.teams, m.fest.nTeams);
-    y += m.fest.nTeams * 40 + 8;
+    y += m.fest.nTeams * kTeamRow + 10;
   }
   font24.draw(&page, 24, y, ui::ModeFestOpen, C_GRAY, C_WHITE);
-  y = drawSlotList(m.findMode(ui::ModeFestOpen), y + 30, 2);
-  y += 8;
+  int listY = y + kSecH;
+  int imgH, nPer;
+  pickSplitGeom(listY, &imgH, &nPer);
+  y = drawSlotList(m.findMode(ui::ModeFestOpen), listY, nPer, imgH);
   font24.draw(&page, 24, y, ui::ModeFestPro, C_GRAY, C_WHITE);
-  drawSlotList(m.findMode(ui::ModeFestPro), y + 30, 2);
+  drawSlotList(m.findMode(ui::ModeFestPro), y + kSecH, nPer, imgH);
   drawFooter(m, kPageFest);
 }
 
 static void drawGearPage(const Model& m) {
-  font40.draw(&page, 24, 60, ui::GearTitle, C_BLACK, C_WHITE);
-  page.drawFastHLine(0, 112, kW, C_MID);
-  int y = 126;
+  drawPageTitle(ui::GearTitle);
+  int y = kContentY;
   if (m.hasMonthly) {
     char line[96];
     snprintf(line, sizeof(line), "%s: %s", ui::MonthlyGear, m.monthly);
-    page.fillRoundRect(12, y, kW - 24, 44, 4, C_LIGHT);
+    page.fillRoundRect(12, y, kW - 24, kInk24 + 16, 4, C_LIGHT);
     font24.drawEllipsis(&page, 24, y + 8, line, C_BLACK, C_LIGHT, kW - 60);
-    y += 56;
+    y += kInk24 + 24;
   }
   for (int i = 0; i < m.nGear; ++i) {
     const GearItem& g = m.gear[i];
@@ -334,18 +416,17 @@ static void drawGearPage(const Model& m) {
     drawImgOrBox(16, y, 72, 72, g.img);
     font24.drawEllipsis(&page, 98, y + 8, g.n, C_BLACK, C_WHITE, kW - 140 - rw);
     font24.draw(&page, kW - 24 - rw, y + 8, right, C_MID, C_WHITE);
-    font24.drawEllipsis(&page, 98, y + 42, g.pn, C_GRAY, C_WHITE, 400);
-    page.drawFastHLine(12, y + 80, kW - 24, C_LIGHT);
-    y += 88;
+    font24.drawEllipsis(&page, 98, y + 8 + kLine24, g.pn, C_GRAY, C_WHITE, 400);
+    page.drawFastHLine(12, y + 8 + kLine24 + kInk24 + 8, kW - 24, C_LIGHT);
+    y += 8 + kLine24 + kInk24 + 16;
   }
   if (m.nGear == 0) drawText(24, y, ui::None, C_MID, C_WHITE);
   drawFooter(m, kPageGear);
 }
 
 static void drawAboutPage(const Model& m) {
-  font40.draw(&page, 24, 60, ui::AboutTitle, C_BLACK, C_WHITE);
-  page.drawFastHLine(0, 112, kW, C_MID);
-  font40.draw(&page, 24, 130, ui::AppTitle, C_BLACK, C_WHITE);
+  drawPageTitle(ui::AboutTitle);
+  font24.draw(&page, 24, kContentY, ui::AppTitle, C_BLACK, C_WHITE);
 
   static const char* lines[] = {
       "把 splatoon3.ink 的对战、鲑鱼跑、活动与祭典",
@@ -354,15 +435,15 @@ static void drawAboutPage(const Model& m) {
       "数据来自 splatoon3.ink，",
       "经 api.splatoon.icu 精简后下发。",
   };
-  int y = 190;
+  int y = kContentY + kInk24 + 16;
   for (const char* ln : lines) {
     if (ln[0]) font24.draw(&page, 24, y, ln, C_DARK, C_WHITE);
-    y += 32;
+    y += kLine24;
   }
 
   y += 16;
   font24.draw(&page, 24, y, ui::AboutGithub, C_GRAY, C_WHITE);
-  y += 36;
+  y += kLine24;
   font24.draw(&page, 24, y, ui::GithubUrl, C_BLACK, C_WHITE);
   y += 64;
   font24.draw(&page, 24, y, ui::TapBack, C_MID, C_WHITE);
@@ -374,97 +455,109 @@ static void drawSettingsPage(const Model& m, const AppStatus& st) {
     drawAboutPage(m);
     return;
   }
-  font40.draw(&page, 24, 60, ui::SettingsTitle, C_BLACK, C_WHITE);
-  page.drawFastHLine(0, 112, kW, C_MID);
+  drawPageTitle(ui::SettingsTitle);
 
-  page.fillRoundRect(16, 140, kW - 32, 120, 8, C_LIGHT);
-  font40.draw(&page, 36, 158, ui::WifiSetup, C_BLACK, C_LIGHT);
+  page.fillRoundRect(16, kContentY, kW - 32, 100, 8, C_LIGHT);
+  font24.draw(&page, 36, kContentY + 16, ui::WifiSetup, C_BLACK, C_LIGHT);
   char sub[64];
   if (st.wifiSsid[0]) {
     snprintf(sub, sizeof(sub), "%s  %s", ui::CurrentNetwork, st.wifiSsid);
   } else {
     snprintf(sub, sizeof(sub), "%s", ui::NoWifi);
   }
-  font24.drawEllipsis(&page, 36, 214, sub, C_DARK, C_LIGHT, kW - 80);
+  font24.drawEllipsis(&page, 36, kContentY + 16 + kInk24 + 10, sub, C_DARK, C_LIGHT,
+                      kW - 80);
 
-  page.drawRoundRect(16, 284, kW - 32, 120, 8, C_MID);
-  font40.draw(&page, 36, 302, ui::AboutTitle, C_BLACK, C_WHITE);
-  font24.draw(&page, 36, 358, ui::AboutHint, C_GRAY, C_WHITE);
+  int y2 = kContentY + 100 + 16;
+  page.drawRoundRect(16, y2, kW - 32, 100, 8, C_MID);
+  font24.draw(&page, 36, y2 + 16, ui::AboutTitle, C_BLACK, C_WHITE);
+  font24.draw(&page, 36, y2 + 16 + kInk24 + 10, ui::AboutHint, C_GRAY, C_WHITE);
 
   drawFooter(m, kPageSettings);
 }
 
 // ------------------------------------------------------------- page 3 coop --
 
-static void drawShiftRow(int y, const Shift& s) {
+static int drawShiftRow(int y, const Shift& s) {
   char range[48], line[160];
   fmtRange(s.st, s.et, range, sizeof(range));
   snprintf(line, sizeof(line), "%s%s", s.big ? "▲大型跑 " : "", s.stage);
-  font24.drawEllipsis(&page, 24, y + 2, line, C_BLACK, C_WHITE, 360);
+  int y1 = y + 4;
+  font24.drawEllipsis(&page, 24, y1, line, C_BLACK, C_WHITE, 360);
   int rw = font24.textWidth(range);
-  font24.draw(&page, kW - 24 - rw, y + 2, range, C_MID, C_WHITE);
+  font24.draw(&page, kW - 24 - rw, y1, range, C_MID, C_WHITE);
   snprintf(line, sizeof(line), "%s: %s · %s · %s · %s", ui::Weapons,
            weaponShown(s, 0), weaponShown(s, 1), weaponShown(s, 2), weaponShown(s, 3));
-  font24.drawEllipsis(&page, 24, y + 28, line, C_GRAY, C_WHITE, kW - 60);
-  page.drawFastHLine(12, y + 56, kW - 24, C_LIGHT);
+  int y2 = y1 + kLine24;
+  font24.drawEllipsis(&page, 24, y2, line, C_GRAY, C_WHITE, kW - 60);
+  int yLine = y2 + kInk24 + 6;
+  page.drawFastHLine(12, yLine, kW - 24, C_LIGHT);
+  return yLine + 8;
 }
 
 static void drawP3(const Model& m) {
-  font40.draw(&page, 24, 60, ui::SalmonTitle, C_BLACK, C_WHITE);
-  page.drawFastHLine(0, 112, kW, C_MID);
+  drawPageTitle(ui::SalmonTitle);
 
   if (m.nShifts == 0 && m.nEggstra == 0) {
-    font40.draw(&page, 24, 200, ui::None, C_MID, C_WHITE);
+    font24.draw(&page, 24, kContentY, ui::None, C_MID, C_WHITE);
     drawFooter(m, kPageSalmon);
     return;
   }
 
-  int y = 126;
-  if (m.nShifts > 0) {
-    const Shift& s = m.shifts[0];
-    bool active = s.st <= nowEpoch() && nowEpoch() < s.et;
-    page.drawRoundRect(12, y, kW - 24, 280, 6, C_MID);
+  int y = kContentY;
+  uint32_t now = nowEpoch();
+  int i0 = m.liveShiftIndex(now);
+  if (i0 >= 0) {
+    const Shift& s = m.shifts[i0];
+    bool active = s.st <= now && now < s.et;
     char cd[24], tl[64];
     if (active) {
-      fmtCountdown(s.et - nowEpoch(), cd, sizeof(cd));
+      fmtCountdown(s.et - now, cd, sizeof(cd));
       snprintf(tl, sizeof(tl), "%s%s", ui::Remaining, cd);
     } else {
-      fmtCountdown(s.st - nowEpoch(), cd, sizeof(cd));
+      fmtCountdown(s.st - now, cd, sizeof(cd));
       snprintf(tl, sizeof(tl), "%s · 开始", cd);
     }
     int tw = font24.textWidth(tl);
     font24.draw(&page, kW - 24 - tw, y + 10, tl, C_DARK, C_WHITE);
     if (s.big) {
-      page.fillRoundRect(24, y + 10, 100, 30, 4, C_BLACK);
+      page.fillRoundRect(24, y + 10, 100, kInk24 + 8, 4, C_BLACK);
       font24.draw(&page, 32, y + 14, ui::BigRun, C_WHITE, C_BLACK);
     }
-    drawImgOrBox(24, y + 46, 248, 124, s.si);
-    font40.drawEllipsis(&page, 284, y + 50, s.stage, C_BLACK, C_WHITE, 230);
+    int iy = y + 10 + kInk24 + 12;
+    drawImgOrBox(24, iy, 248, 124, s.si);
+    font24.drawEllipsis(&page, 284, iy, s.stage, C_BLACK, C_WHITE, 230);
     if (s.boss[0]) {
       char boss[48];
       snprintf(boss, sizeof(boss), "%s %s", ui::KingSalmonid, s.boss);
-      font24.drawEllipsis(&page, 284, y + 96, boss, C_GRAY, C_WHITE, 230);
+      font24.drawEllipsis(&page, 284, iy + kLine24, boss, C_GRAY, C_WHITE, 230);
     }
+    int wy = iy + 124 + 12;
     for (int i = 0; i < 4; ++i) {
       int wx = 24 + i * 128;
-      drawImgOrBox(wx, y + 180, 64, 64, s.wi[i]);
-      font24.drawEllipsis(&page, wx + 68, y + 196, weaponShown(s, i), C_DARK, C_WHITE, 56);
+      drawImgOrBox(wx, wy, 64, 64, s.wi[i]);
+      font24.drawEllipsis(&page, wx, wy + 64 + 8, weaponShown(s, i), C_DARK, C_WHITE, 120);
     }
-    y += 292;
+    y += 10 + kInk24 + 12 + 124 + 12 + 64 + 8 + kInk24 + 12;
+    page.drawRoundRect(12, kContentY, kW - 24, y - kContentY, 6, C_MID);
   }
-  for (int i = 1; i < m.nShifts && i <= 3; ++i, y += 76) {
+  int shown = 0;
+  for (int i = (i0 < 0 ? 0 : i0 + 1); i < m.nShifts && shown < 3; ++i) {
     const Shift& s = m.shifts[i];
-    drawImgOrBox(24, y, 120, 60, s.si);
+    if (s.et <= now) continue;
+    drawImgOrBox(24, y, 120, 64, s.si);
     char range[48];
     fmtRange(s.st, s.et, range, sizeof(range));
     font24.drawEllipsis(&page, 156, y + 4, s.stage, C_BLACK, C_WHITE, 360);
-    font24.draw(&page, 156, y + 38, range, C_MID, C_WHITE);
+    font24.draw(&page, 156, y + 4 + kLine24, range, C_MID, C_WHITE);
+    y += 4 + kLine24 + kInk24 + 10;
+    ++shown;
   }
   if (m.nEggstra > 0) {
-    page.fillRoundRect(12, y + 4, kW - 24, 36, 4, C_LIGHT);
-    font24.draw(&page, 24, y + 10, ui::Eggstra, C_BLACK, C_LIGHT);
-    y += 48;
-    for (int i = 0; i < m.nEggstra; ++i, y += 62) drawShiftRow(y, m.eggstra[i]);
+    page.fillRoundRect(12, y + 4, kW - 24, kInk24 + 16, 4, C_LIGHT);
+    font24.draw(&page, 24, y + 8, ui::Eggstra, C_BLACK, C_LIGHT);
+    y += kInk24 + 28;
+    for (int i = 0; i < m.nEggstra; ++i) y = drawShiftRow(y, m.eggstra[i]);
   }
   drawFooter(m, kPageSalmon);
 }
@@ -479,31 +572,33 @@ static int drawEventCard(int y, const EventItem& e) {
   snprintf(meta, sizeof(meta), "%s%s ~ %s", active ? ui::NowOpen : "", a, b);
 
   page.drawRoundRect(12, y, kW - 24, 8, 4, C_MID);
-  font40.drawEllipsis(&page, 24, y + 18, e.n, C_BLACK, C_WHITE, kW - 250);
+  font24.drawEllipsis(&page, 24, y + 8, e.n, C_BLACK, C_WHITE, kW - 250);
   int mw = font24.textWidth(meta);
-  font24.draw(&page, kW - 24 - mw, y + 26, meta, active ? C_BLACK : C_MID, C_WHITE);
+  font24.draw(&page, kW - 24 - mw, y + 8, meta, active ? C_BLACK : C_MID, C_WHITE);
 
   char line[128];
   snprintf(line, sizeof(line), "%s · %s · %s", e.rn, e.s1, e.s2);
-  font24.drawEllipsis(&page, 24, y + 68, line, C_DARK, C_WHITE, kW - 60);
+  int yb = y + 8 + kLine24;
+  font24.drawEllipsis(&page, 24, yb, line, C_DARK, C_WHITE, kW - 60);
 
   char lines[3][80];
   int nl = wrapText(e.d, kW - 60, lines[0], 2, sizeof(lines[0]));
-  for (int i = 0; i < nl; ++i) font24.draw(&page, 24, y + 100 + i * 30, lines[i], C_GRAY, C_WHITE);
-  y += 100 + nl * 30;
+  int yd = yb + kLine24;
+  for (int i = 0; i < nl; ++i) font24.draw(&page, 24, yd + i * kLine24, lines[i], C_GRAY, C_WHITE);
+  y = yd + nl * kLine24;
 
   nl = wrapText(e.r, kW - 60, lines[0], 3, sizeof(lines[0]));
-  for (int i = 0; i < nl; ++i) font24.draw(&page, 24, y + i * 28, lines[i], C_MID, C_WHITE);
-  y += nl * 28;
+  for (int i = 0; i < nl; ++i) font24.draw(&page, 24, y + i * kLine24, lines[i], C_MID, C_WHITE);
+  y += nl * kLine24;
 
   int np = e.np > 6 ? 6 : e.np;
   for (int i = 0; i < np; ++i) {
     char range[32];
     fmtRange(e.p[i].st, e.p[i].et, range, sizeof(range));
     bool now = e.p[i].st <= nowEpoch() && nowEpoch() < e.p[i].et;
-    font24.draw(&page, 40, y + i * 26, range, now ? C_BLACK : C_MID, C_WHITE);
+    font24.draw(&page, 40, y + i * kLine24, range, now ? C_BLACK : C_MID, C_WHITE);
   }
-  return y + np * 26 + 14;
+  return y + np * kLine24 + 14;
 }
 
 static void drawFestTeams(int y, const Team* teams, int n) {
@@ -511,29 +606,33 @@ static void drawFestTeams(int y, const Team* teams, int n) {
     const Team& t = teams[i];
     uint8_t lum = (t.r * 30 + t.g * 59 + t.b * 11) / 100;
     uint8_t gray = (uint8_t)(15 - lum * 15 / 255);  // dark color → dark gray
-    page.fillRoundRect(24, y + i * 40, 40, 28, 4, gray);
-    font24.drawEllipsis(&page, 80, y + i * 40 + 2, t.n, C_BLACK, C_WHITE, 200);
-    if (t.win) font24.draw(&page, 300, y + i * 40 + 2, ui::Won, C_BLACK, C_WHITE);
+    int ty = y + i * kTeamRow;
+    page.fillRoundRect(24, ty, 40, kInk24, 4, gray);
+    font24.drawEllipsis(&page, 80, ty + 2, t.n, C_BLACK, C_WHITE, 200);
+    if (t.win) font24.draw(&page, 300, ty + 2, ui::Won, C_BLACK, C_WHITE);
     if (t.hasVr) {
       char vr[32];
       snprintf(vr, sizeof(vr), "%s %.1f%%", ui::Votes, t.vr / 100.0);
-      font24.draw(&page, kW - 24 - font24.textWidth(vr), y + i * 40 + 2, vr, C_GRAY, C_WHITE);
+      font24.draw(&page, kW - 24 - font24.textWidth(vr), ty + 2, vr, C_GRAY, C_WHITE);
     }
   }
 }
 
 static void drawP4(const Model& m) {
-  font40.draw(&page, 24, 60, ui::EventsTitle, C_BLACK, C_WHITE);
-  font40.draw(&page, 24 + font40.textWidth(ui::EventsTitle) + 24, 60, "/", C_MID, C_WHITE);
-  font40.draw(&page, 24 + font40.textWidth(ui::EventsTitle) + 72, 60, ui::FestTitle,
-              C_BLACK, C_WHITE);
-  page.drawFastHLine(0, 112, kW, C_MID);
+  char title[48];
+  snprintf(title, sizeof(title), "%s / %s", ui::EventsTitle, ui::FestTitle);
+  drawPageTitle(title);
 
-  int y = 126;
-  int ne = m.nEvents > 2 ? 2 : m.nEvents;
-  if (ne == 0) {
+  int y = kContentY;
+  int eventH = 8 + kInk24 + 10 + kMapHNative + 8 + kInk24 + 10 + kInk24 + 8;
+  int room = kH - kFooterH - 200 - y;
+  int ne = room / eventH;
+  if (ne > m.nEvents) ne = m.nEvents;
+  if (ne > 2) ne = 2;
+  if (ne < 0) ne = 0;
+  if (m.nEvents == 0) {
     drawText(24, y, ui::None, C_MID, C_WHITE);
-    y += 40;
+    y += kInk24 + 10;
   }
   for (int i = 0; i < ne; ++i) {
     const EventItem& e = m.events[i];
@@ -544,57 +643,72 @@ static void drawP4(const Model& m) {
     snprintf(meta, sizeof(meta), "%s~%s", a, b);
     int mw = font24.textWidth(meta);
     font24.draw(&page, kW - 24 - mw, y, meta, C_MID, C_WHITE);
-    drawImgOrBox(24, y + 34, 248, 80, e.si1);
-    drawImgOrBox(280, y + 34, 248, 80, e.si2);
-    font24.drawEllipsis(&page, 24, y + 118, e.d, C_GRAY, C_WHITE, kW - 48);
-    y += 154;
+    int iy = y + kInk24 + 10;
+    drawImgOrBox(12, iy, kMapW, kMapHNative, e.si1);
+    drawImgOrBox(12 + kMapW + kMapGap, iy, kMapW, kMapHNative, e.si2);
+    int ny = iy + kMapHNative + 8;
+    font24.drawEllipsis(&page, 12, ny, e.s1, C_DARK, C_WHITE, kMapW);
+    font24.drawEllipsis(&page, 12 + kMapW + kMapGap, ny, e.s2, C_GRAY, C_WHITE, kMapW);
+    int dy = ny + kLine24;
+    font24.drawEllipsis(&page, 24, dy, e.d, C_GRAY, C_WHITE, kW - 48);
+    y = dy + kInk24 + 12;
   }
 
   page.drawFastHLine(12, y, kW - 24, C_LIGHT);
   y += 12;
   if (m.fest.present) {
     const FestInfo& f = m.fest;
-    font40.drawEllipsis(&page, 24, y, f.title, C_BLACK, C_WHITE, kW - 200);
+    font24.drawEllipsis(&page, 24, y, f.title, C_BLACK, C_WHITE, kW - 48);
+    y += kLine24;
     char tbuf[96], a[24], b[24];
     fmtHM(f.st, a, sizeof(a));
     fmtHM(f.et, b, sizeof(b));
     const char* phase = !strcmp(f.state, "SECOND_HALF") ? ui::Pro : ui::Open;
     snprintf(tbuf, sizeof(tbuf), "%s · %s ~ %s", phase, a, b);
-    font24.draw(&page, 24, y + 52, tbuf, C_GRAY, C_WHITE);
+    font24.draw(&page, 24, y, tbuf, C_GRAY, C_WHITE);
+    y += kLine24;
     if (f.mt) {
       char mt[24];
       fmtHM(f.mt, mt, sizeof(mt));
       snprintf(tbuf, sizeof(tbuf), "%s %s", ui::Midterm, mt);
-      font24.draw(&page, 24, y + 84, tbuf, C_MID, C_WHITE);
+      font24.draw(&page, 24, y, tbuf, C_MID, C_WHITE);
+      y += kLine24;
     }
-    drawFestTeams(y + 116, f.teams, f.nTeams);
+    drawFestTeams(y, f.teams, f.nTeams);
+    y += f.nTeams * kTeamRow + 8;
     if (f.nTri > 0) {
       char tri[96];
       snprintf(tri, sizeof(tri), "%s: %s", ui::Tricolor, f.tri[0]);
-      font24.drawEllipsis(&page, 24, y + 236, tri, C_GRAY, C_WHITE, kW - 60);
+      font24.drawEllipsis(&page, 24, y, tri, C_GRAY, C_WHITE, kW - 60);
+      y += kLine24;
     }
   } else if (m.festNext.present) {
     const FestHist& f = m.festNext;
     drawText(24, y, "下次祭典", C_GRAY, C_WHITE);
-    font40.drawEllipsis(&page, 24, y + 34, f.title, C_BLACK, C_WHITE, kW - 60);
+    y += kLine24;
+    font24.drawEllipsis(&page, 24, y, f.title, C_BLACK, C_WHITE, kW - 48);
+    y += kLine24;
     char tbuf[96], a[24], b[24];
     fmtHM(f.st, a, sizeof(a));
     fmtHM(f.et, b, sizeof(b));
     snprintf(tbuf, sizeof(tbuf), "%s ~ %s", a, b);
-    font24.draw(&page, 24, y + 86, tbuf, C_MID, C_WHITE);
-    drawFestTeams(y + 122, f.teams, f.nTeams);
+    font24.draw(&page, 24, y, tbuf, C_MID, C_WHITE);
+    y += kLine24;
+    drawFestTeams(y, f.teams, f.nTeams);
+    y += f.nTeams * kTeamRow;
   } else {
     drawText(24, y, "祭典 · 暂无", C_MID, C_WHITE);
   }
 
-  if (m.nFestRecent > 0) {
+  if (m.nFestRecent > 0 && y + 40 + kTeamRow <= kH - kFooterH) {
     const FestHist& f = m.festRecent[0];
-    int ry = 712;
-    page.drawFastHLine(12, ry - 10, kW - 24, C_LIGHT);
+    y += 12;
+    page.drawFastHLine(12, y, kW - 24, C_LIGHT);
+    y += 10;
     char tbuf[128];
     snprintf(tbuf, sizeof(tbuf), "%s %s %s", ui::FestTitle, ui::Results, f.title);
-    font24.drawEllipsis(&page, 24, ry + 2, tbuf, C_DARK, C_WHITE, kW - 60);
-    drawFestTeams(ry + 34, f.teams, f.nTeams);
+    font24.drawEllipsis(&page, 24, y, tbuf, C_DARK, C_WHITE, kW - 60);
+    drawFestTeams(y + kLine24, f.teams, f.nTeams);
   }
   drawFooter(m, kPageEvents);
 }
@@ -633,8 +747,9 @@ int settingsHit(int x, int y, bool about) {
   if (y <= kHeaderH || y >= kH - kFooterH) return 0;
   if (about) return 3;
   (void)x;
-  if (y >= 140 && y < 260) return 1;
-  if (y >= 284 && y < 404) return 2;
+  if (y >= kContentY && y < kContentY + 100) return 1;
+  int y2 = kContentY + 116;
+  if (y >= y2 && y < y2 + 100) return 2;
   return 0;
 }
 
@@ -658,14 +773,10 @@ bool dumpCanvas() {
 }  // namespace render
 
 bool powerDrawSleepHint(M5Canvas& c) {
-  constexpr int bw = 168, bh = 168;
-  int x = (render::kW - bw) / 2;
-  int y = (render::kH - bh) / 2 - 50;
-  imgDrawFit(&c, x, y, bw, bh, kBuddyKey);
-  if (font24.valid()) {
-    const char* msg = ui::SleepHint;
-    int w = font24.textWidth(msg);
-    font24.draw(&c, (render::kW - w) / 2, y + bh + 24, msg, 15, 0);
-  }
+  c.fillSprite(15);
+  constexpr int box = 320;
+  int x = (render::kW - box) / 2;
+  int y = (render::kH - box) / 2;
+  imgDrawContain(&c, x, y, box, box, kBuddyKey);
   return true;
 }
