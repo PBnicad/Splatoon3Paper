@@ -10,6 +10,7 @@ Cloudflare Worker 反向代理 [splatoon3.ink](https://splatoon3.ink) 的公开�
 | 路径 | 说明 |
 |---|---|
 | `GET /api/v1/compact` | 设备专用精简 JSON（见下），`Cache-Control: max-age=300` |
+| `GET /api/v1/img?k=` | Worker 压缩后的 4bpp 灰度图（SNI1）。`k` 形如 `s:{64hex}_{0\|1}` / `w:` / `g:` / `b:buddy` |
 | `GET /data/<file>` | splatoon3.ink 原样透传（仅 `/data/` 白名单路径），`max-age=600` |
 | `GET /healthz` | 存活探测 |
 
@@ -36,8 +37,9 @@ Cloudflare Worker 反向代理 [splatoon3.ink](https://splatoon3.ink) 的公开�
     "festOpen":{ "a": Slot, "u": [Slot, ...] },   // 祭典(常规) 仅祭典期间存在
     "festPro": { "a": Slot, "u": [Slot, ...] }    // 祭典(专业) 仅祭典期间存在
   },
-  // Slot = { "st":…, "et":…, "rule":"TURF_WAR", "rn":"占地对战", "s":["图1","图2"] }
-  // a = 当前时段(start<=now<end)；u = 未来时段(保持时间升序)，VS 类 12 槽≈24h
+  // Slot = { "st":…, "et":…, "rule":"TURF_WAR", "rn":"占地对战", "s":["图1","图2"],
+  //          "si":["s:{hash}_1", ...] }
+  // a = 当前时段；u = 未来最多 4 槽（约 8 小时，避免把屏撑爆）
 
   "fest": null,               // 进行中/即将开始的祭典 (schedules.currentFest)
   // fest = { "s":"FIRST_HALF|SECOND_HALF", "st":…, "et":…, "mt":…(中期),

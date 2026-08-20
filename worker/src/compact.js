@@ -20,6 +20,15 @@ const pick = (v, fallback) => (v === undefined || v === null || v === "" ? fallb
 const isUpcoming = (startTime, nowMs) =>
   startTime ? Date.parse(startTime) > nowMs : false;
 
+const IMG_HASH_RE = /\/([0-9a-f]{64}_[01])\.png(?:\?.*)?$/i;
+const UPCOMING_CAP = 4; // ~8 hours of 2h slots — the 24h list overflowed the panel
+
+export function imgKey(url, kind) {
+  if (!url || typeof url !== "string") return "";
+  const m = url.match(IMG_HASH_RE);
+  return m ? `${kind}:${m[1].toLowerCase()}` : "";
+}
+
 /** localized name lookup: locale table keyed by GraphQL/base64 or
  *  __splatoon3ink_id, value like { name } (or a plain string). */
 function locName(table, id, fallback) {
@@ -32,13 +41,15 @@ function locName(table, id, fallback) {
 
 function vsSlot(node, setting, loc) {
   const rule = setting.vsRule;
-  const stages = (setting.vsStages || []).map((s) => locName(loc?.stages, s.id, s.name));
+  const vs = setting.vsStages || [];
+  const stages = vs.map((s) => locName(loc?.stages, s.id, s.name));
   return {
     st: epoch(node.startTime),
     et: epoch(node.endTime),
     rule: rule?.rule ?? null,
     rn: locName(loc?.rules, rule?.id, rule?.name ?? ""),
     s: stages,
+    si: vs.map((s) => imgKey(s.image?.url, "s")),
   };
 }
 
@@ -55,7 +66,7 @@ function modeFromNodes(nodes, pickSetting, loc, nowMs) {
   // site predicates, evaluated on epoch seconds: active = start<=now<end
   const active =
     slots.find((s) => s.st * 1000 <= nowMs && s.et * 1000 > nowMs) ?? null;
-  const upcoming = slots.filter((s) => s.st * 1000 > nowMs);
+  const upcoming = slots.filter((s) => s.st * 1000 > nowMs).slice(0, UPCOMING_CAP);
   return { a: active, u: upcoming };
 }
 
@@ -91,11 +102,12 @@ function buildEvents(data, loc, nowMs) {
       st,
       et,
       n: pick(le?.name, ev.name ?? ""),
-      d: br2nl(pick(le?.desc, ev.desc ?? "")),
-      r: br2nl(pick(le?.regulation, ev.regulation ?? "")),
+      d: br2nl(pick(le?.desc, ev.desc ?? "")).slice(0, 80),
+      r: br2nl(pick(le?.regulation, ev.regulation ?? "")).slice(0, 160),
       rn: locName(loc?.rules, ls.vsRule.id, ls.vsRule.name ?? ""),
       s: (ls.vsStages || []).map((x) => locName(loc?.stages, x.id, x.name)),
-      p: periods,
+      si: (ls.vsStages || []).map((x) => imgKey(x.image?.url, "s")),
+      p: periods.slice(0, 4),
     });
   }
   return out;
@@ -117,8 +129,10 @@ function coopShift(node, isBigRun, loc) {
     st: epoch(node.startTime),
     et: epoch(node.endTime),
     stage: locName(loc?.stages, s.coopStage?.id, s.coopStage?.name ?? ""),
+    si: imgKey(s.coopStage?.thumbnailImage?.url || s.coopStage?.image?.url, "s"),
     boss: s.boss ? locName(loc?.bosses, s.boss.id, s.boss.name ?? "") : null,
     w: weapons.map(weaponName),
+    wi: weapons.map((x) => imgKey(x?.image?.url, "w")),
     big: !!isBigRun,
     mys: weapons.some((x) => x?.name === "Random"),
     gmys: weapons.some((x) => GRIZZCO_RANDOM_IDS.has(x?.__splatoon3ink_id)),
@@ -252,6 +266,7 @@ function buildGear(gearData, loc) {
       et: epoch(g.saleEndTime),
       k: gear.__typename ?? null,
       pn: locName(loc?.powers, power.__splatoon3ink_id, power.name ?? ""),
+      i: imgKey(gear.image?.url, "g"),
     };
   });
 }

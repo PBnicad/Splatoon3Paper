@@ -60,6 +60,37 @@ function isForbiddenHost(hostname) {
 
 /** Build the https URL for an upstream data path, refusing anything that is
  *  not the fixed allowlisted public host. Throws on violation. */
+const IMG_DIR = {
+  s: "stage_img/icon/low_resolution",
+  w: "weapon_illust",
+  g: "gear_img",
+};
+const FILE_RE = /^[0-9a-f]{64}_[01]$/;
+
+/** splatnet PNG under /assets/splatnet/v3/{dir}/{hash}_{0|1}.png */
+export function assetPngUrl(kind, file) {
+  const dir = IMG_DIR[kind];
+  if (!dir) throw new Error("img kind");
+  const f = String(file).toLowerCase();
+  if (!FILE_RE.test(f)) throw new Error("img file");
+  const path = `/assets/splatnet/v3/${dir}/${f}.png`;
+  const u = new URL(path, UPSTREAM_ORIGIN);
+  if (u.protocol !== "https:") throw new Error("upstream must be https");
+  if (!UPSTREAM_HOSTS.has(u.hostname)) throw new Error(`upstream host not allowlisted: ${u.hostname}`);
+  if (isForbiddenHost(u.hostname)) throw new Error(`upstream host forbidden: ${u.hostname}`);
+  u.username = "";
+  u.password = "";
+  return u;
+}
+
+export function buddyUrl() {
+  const u = new URL("/assets/little-buddy-BaT6EAV5.png", UPSTREAM_ORIGIN);
+  if (!UPSTREAM_HOSTS.has(u.hostname) || isForbiddenHost(u.hostname)) {
+    throw new Error("buddy host refused");
+  }
+  return u;
+}
+
 export function upstreamUrl(path) {
   if (typeof path !== "string" || path === "") {
     throw new Error("upstream path required");
@@ -87,9 +118,14 @@ export async function fetchUpstreamJson(path, { etag } = {}) {
   const res = await fetch(url, {
     method: "GET",
     headers,
-    redirect: "error", // never follow redirects to other hosts
+    // "manual": workers' fetch has no "error" mode; we never follow
+    // redirects, 3xx is rejected below (no fetch to any other host)
+    redirect: "manual",
     cf: { cacheEverything: true, cacheTtl: 600 },
   });
+  if (res.status >= 300 && res.status < 400) {
+    throw new Error(`upstream ${path} redirected to ${res.headers.get("location")}`);
+  }
   if (res.status === 304) return { notModified: true, etag: res.headers.get("etag") || etag };
   if (!res.ok) throw new Error(`upstream ${path} -> ${res.status}`);
   return { json: await res.json(), etag: res.headers.get("etag") };

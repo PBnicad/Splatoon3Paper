@@ -9,7 +9,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { buildCompact } from "../src/compact.js";
-import { upstreamUrl, isForbiddenHost } from "../src/upstream.js";
+import { upstreamUrl, isForbiddenHost, assetPngUrl } from "../src/upstream.js";
 
 const FIX = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
 const load = (f) => JSON.parse(readFileSync(join(FIX, f), "utf8"));
@@ -36,6 +36,16 @@ test("upstreamUrl only builds allowlisted https /data/ URLs", () => {
   assert.throws(() => upstreamUrl(""));
 });
 
+test("assetPngUrl only allows splatnet hashed pngs", () => {
+  const u = assetPngUrl("s", "9b1c17b2075479d0397d2fb96efbc6fa3a28900712920e5fe1e9dfc59c6abc5c_1");
+  assert.equal(
+    u.pathname,
+    "/assets/splatnet/v3/stage_img/icon/low_resolution/9b1c17b2075479d0397d2fb96efbc6fa3a28900712920e5fe1e9dfc59c6abc5c_1.png",
+  );
+  assert.throws(() => assetPngUrl("s", "../etc/passwd"));
+  assert.throws(() => assetPngUrl("x", "9b1c17b2075479d0397d2fb96efbc6fa3a28900712920e5fe1e9dfc59c6abc5c_1"));
+});
+
 test("isForbiddenHost rejects local/private/reserved hosts", () => {
   for (const bad of [
     "localhost", "foo.localhost", "127.0.0.1", "10.1.2.3", "192.168.0.1",
@@ -57,7 +67,8 @@ test("regular mode: active slot + upcoming list (site predicates)", () => {
   assert.equal(m.a.st, Math.floor(Date.parse(firstNode.startTime) / 1000));
   assert.ok(m.a.et * 1000 > NOW, "active end is in the future");
   const total = schedules.data.regularSchedules.nodes.length;
-  assert.equal(m.u.length, total - 1, "all remaining nodes are upcoming");
+  assert.equal(m.u.length, Math.min(4, total - 1), "upcoming capped at 4 slots (~8h)");
+  assert.ok(m.a.si?.[0]?.startsWith("s:"), "active slot carries stage image key");
   for (let i = 1; i < m.u.length; i++) {
     assert.ok(m.u[i - 1].st <= m.u[i].st, "upcoming preserved API order");
     assert.ok(m.u[i].st * 1000 > NOW, "upcoming starts strictly after now");
@@ -149,7 +160,7 @@ test("events aggregate timePeriods and strip <br />", () => {
   const n0 = src[0];
   assert.equal(e0.st, Math.floor(Math.min(...n0.timePeriods.map((p) => Date.parse(p.startTime))) / 1000));
   assert.equal(e0.et, Math.floor(Math.max(...n0.timePeriods.map((p) => Date.parse(p.endTime))) / 1000));
-  assert.equal(e0.p.length, n0.timePeriods.length);
+  assert.equal(e0.p.length, Math.min(4, n0.timePeriods.length));
   assert.ok(!/<br/i.test(e0.d) && !/<br/i.test(e0.r), "br tags stripped");
   assert.ok(e0.n.length > 0 && e0.s.length > 0);
 });

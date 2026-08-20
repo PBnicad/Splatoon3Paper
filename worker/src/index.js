@@ -11,6 +11,7 @@
 
 import { fetchUpstreamJson, upstreamUrl, UPSTREAM_UA } from "./upstream.js";
 import { buildCompact } from "./compact.js";
+import { fetchAndCompress } from "./img.js";
 
 const DATA_PATH_RE = /^\/data\/[A-Za-z0-9][A-Za-z0-9._\-/]*$/;
 const EDGE_TTL = 600; // seconds; upstream data changes at most hourly
@@ -37,6 +38,16 @@ function jsonReply(obj, status, headers = {}) {
   });
 }
 
+/** Re-serve a cached/stale response with an X-Cache header. Responses read
+ *  back from the Cache API have immutable headers, so rebuild instead of
+ *  mutating. */
+function rewrap(res, cacheStatus) {
+  const headers = new Headers();
+  for (const [k, v] of res.headers) headers.set(k, v);
+  headers.set("X-Cache", cacheStatus);
+  return new Response(res.body, { status: res.status, headers });
+}
+
 // ---------------------------------------------------------------- /data/* --
 async function handlePassthrough(request, url, ctx) {
   if (!DATA_PATH_RE.test(url.pathname)) {
@@ -44,19 +55,18 @@ async function handlePassthrough(request, url, ctx) {
   }
   const cache = caches.default;
   const hit = await cacheGet(cache, url);
-  if (hit) {
-    const res = hit.clone();
-    res.headers.set("X-Cache", "HIT");
-    return res;
-  }
+  if (hit) return rewrap(hit, "HIT");
   const upstream = upstreamUrl(url.pathname + url.search);
   try {
     const res = await fetch(upstream, {
       method: "GET",
       headers: { "User-Agent": UPSTREAM_UA },
-      redirect: "error",
+      redirect: "manual", // never follow redirects; 3xx rejected below
       cf: { cacheEverything: true, cacheTtl: EDGE_TTL },
     });
+    if (res.status >= 300 && res.status < 400) {
+      throw new Error(`upstream redirected to ${res.headers.get("location")}`);
+    }
     if (res.ok) {
       const out = new Response(res.body, res);
       out.headers.set("Cache-Control", `public, max-age=${EDGE_TTL}`);
@@ -74,11 +84,7 @@ async function handlePassthrough(request, url, ctx) {
     throw new Error(`upstream ${res.status}`);
   } catch (e) {
     const stale = await cacheGet(cache, shadowUrl(url));
-    if (stale) {
-      const res = stale.clone();
-      res.headers.set("X-Cache", "STALE");
-      return res;
-    }
+    if (stale) return rewrap(stale, "STALE");
     return jsonReply({ error: "upstream unavailable" }, 502);
   }
 }
@@ -95,11 +101,7 @@ const UPSTREAM_FILES = [
 async function handleCompact(url, ctx) {
   const cache = caches.default;
   const hit = await cacheGet(cache, url);
-  if (hit && !url.searchParams.has("nocache")) {
-    const res = hit.clone();
-    res.headers.set("X-Cache", "HIT");
-    return res;
-  }
+  if (hit && !url.searchParams.has("nocache")) return rewrap(hit, "HIT");
   try {
     const parts = await Promise.all(
       UPSTREAM_FILES.map(async ([key, path]) => {
@@ -124,12 +126,29 @@ async function handleCompact(url, ctx) {
     return out;
   } catch (e) {
     const stale = await cacheGet(cache, shadowUrl(url));
-    if (stale) {
-      const res = stale.clone();
-      res.headers.set("X-Cache", "STALE");
-      return res;
-    }
+    if (stale) return rewrap(stale, "STALE");
     return jsonReply({ error: "upstream unavailable", detail: String(e?.message || e) }, 502);
+  }
+}
+
+// ----------------------------------------------------------- /api/v1/img --
+async function handleImg(url, ctx) {
+  const key = url.searchParams.get("k") || "";
+  const cache = caches.default;
+  const hit = await cacheGet(cache, url);
+  if (hit) return rewrap(hit, "HIT");
+  try {
+    const body = await fetchAndCompress(key);
+    const headers = {
+      "Content-Type": "application/octet-stream",
+      "Cache-Control": "public, max-age=86400",
+      "X-Cache": "MISS",
+    };
+    const out = new Response(body, { status: 200, headers });
+    ctx.waitUntil(cache.put(new Request(url), out.clone()));
+    return out;
+  } catch (e) {
+    return jsonReply({ error: "img failed", detail: String(e?.message || e) }, 502);
   }
 }
 
@@ -146,13 +165,16 @@ export default {
     if (url.pathname === "/api/v1/compact" || url.pathname === "/api/v1/compact/") {
       return handleCompact(url, ctx);
     }
+    if (url.pathname === "/api/v1/img" || url.pathname === "/api/v1/img/") {
+      return handleImg(url, ctx);
+    }
     if (url.pathname.startsWith("/data/")) {
       return handlePassthrough(request, url, ctx);
     }
     if (url.pathname === "/") {
       return jsonReply({
         name: "splatoon3-m5paper-proxy",
-        endpoints: ["/api/v1/compact", "/data/{schedules,festivals,gear,coop,locale/*}.json", "/healthz"],
+        endpoints: ["/api/v1/compact", "/api/v1/img?k=", "/data/{schedules,festivals,gear,coop,locale/*}.json", "/healthz"],
         attribution: "data: splatoon3.ink",
       });
     }
