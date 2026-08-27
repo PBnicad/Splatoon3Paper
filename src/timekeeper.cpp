@@ -22,7 +22,15 @@ bool timeSyncNtp(uint32_t timeoutMs) {
     delay(200);
     if (millis() - t0 > timeoutMs) return false;
   }
-  // mirror into the RTC (stored as UTC)
+  Serial.println("[time] clock valid (ntp/date)");
+  return true;
+}
+
+// Runs on the UI task only: BM8563 shares the I2C bus with the GT911 touch
+// controller that M5.update() polls in loop(), and Arduino Wire has no
+// cross-task lock, so the net task must never touch the RTC.
+void timeMirrorToRtc() {
+  if (!timeValid()) return;
   time_t t = time(nullptr);
   struct tm utc;
   gmtime_r(&t, &utc);
@@ -37,8 +45,7 @@ bool timeSyncNtp(uint32_t timeoutMs) {
   tmv.seconds = utc.tm_sec;
   M5.Rtc.setDate(&d);
   M5.Rtc.setTime(&tmv);
-  Serial.println("[time] ntp synced, rtc updated");
-  return true;
+  Serial.println("[time] rtc updated");
 }
 
 void timeSeedFromRtc() {

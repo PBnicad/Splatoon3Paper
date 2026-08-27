@@ -14,6 +14,7 @@
 
 #include "cache.h"
 #include "certs.h"
+#include "timekeeper.h"
 
 // Handshake wants two 16KB record buffers. Internal DRAM is too tight once
 // Wi-Fi + the net task are up, so mbedtls allocs go to PSRAM first.
@@ -92,10 +93,38 @@ void wifiRadioOff() {
   Serial.println("[net] radio off");
 }
 
-void wifiKeepAlive() {
-  if (WiFi.status() != WL_CONNECTED) {
-    WiFi.reconnect();
+// When NTP is blocked and the RTC battery is dead, the HTTP Date response
+// header (present on every Cloudflare response, ~1s resolution) is the only
+// clock source left. Seed the system clock once; NTP still polishes it later.
+static uint32_t daysFromCivil(int y, int m, int d) {
+  y -= m <= 2;
+  const int era = (y >= 0 ? y : y - 399) / 400;
+  const uint32_t yoe = (uint32_t)(y - era * 400);
+  const uint32_t doy = (153u * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+  const uint32_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  return (uint32_t)era * 146097 + doe - 719468;
+}
+
+static void seedTimeFromHttpDate(const String& d) {
+  if (timeValid()) return;
+  static const char* kMonths[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+  char wd[8], mon[4] = {0};
+  int day = 0, year = 0, hh = 0, mm = 0, ss = 0;
+  // "Tue, 15 Nov 2024 08:12:31 GMT"
+  if (sscanf(d.c_str(), "%3[^,], %d %3s %d %d:%d:%d", wd, &day, mon, &year, &hh,
+             &mm, &ss) != 7) {
+    return;
   }
+  int mo = -1;
+  for (int i = 0; i < 12; ++i)
+    if (!strcmp(mon, kMonths[i])) mo = i + 1;
+  if (mo < 1 || year < 2023 || year > 2100) return;
+  time_t epoch = (time_t)daysFromCivil(year, mo, day) * 86400 + hh * 3600 + mm * 60 + ss;
+  if (epoch <= 1700000000) return;
+  struct timeval tv = {.tv_sec = epoch, .tv_usec = 0};
+  settimeofday(&tv, nullptr);
+  Serial.println("[net] clock seeded from HTTP Date");
 }
 
 static bool readHttpBody(HTTPClient& http, String& body, uint32_t timeoutMs) {
@@ -152,11 +181,12 @@ int httpsGet(const char* host, const char* path, const char* etagIn,
     http.useHTTP10(true);    // Content-Length, no chunked (Cloudflare default)
     http.setReuse(false);
     http.setUserAgent("M5Paper-Splatoon/1.0");
-    const char* hdrs[] = {"ETag", "X-Cache", "Content-Length", "Transfer-Encoding"};
-    http.collectHeaders(hdrs, 4);
+    const char* hdrs[] = {"ETag", "X-Cache", "Content-Length", "Transfer-Encoding", "Date"};
+    http.collectHeaders(hdrs, 5);
     if (etagIn && etagIn[0]) http.addHeader("If-None-Match", etagIn);
     int code = http.GET();
     int sz = http.getSize();
+    seedTimeFromHttpDate(http.header("Date"));
     Serial.printf("[net] GET done code=%d size=%d te=%s heap=%u try=%d\n", code, sz,
                   http.header("Transfer-Encoding").c_str(), ESP.getFreeHeap(), attempt);
     Serial.flush();

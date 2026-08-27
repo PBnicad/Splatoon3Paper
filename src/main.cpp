@@ -33,6 +33,7 @@ static uint32_t lastMinute = 0;
 static uint32_t gBodyUntil = 0;  // redraw maps when the current 2h slot ends
 static uint32_t gLastBtnB = 0;
 static uint32_t gLastSerial = 0;
+static bool gRtcMirrored = false;
 
 static int readWheelDir() {
   bool up = M5.BtnA.wasPressed();
@@ -50,6 +51,13 @@ static void loadCacheIfEmpty() {
   uint32_t ts = 0;
   String metaEtag;
   cacheLoadMeta(ts, metaEtag);
+  // Don't paint weeks-old schedules when the clock is trustworthy; an unset
+  // clock (ts unverifiable) still loads so the panel isn't blank.
+  if (timeValid() && ts && nowEpoch() - ts > kMaxModelAgeSec) {
+    Serial.println("[app] cached model too old, ignoring");
+    free(buf);
+    return;
+  }
   if (modelParse(model, buf, len)) {
     hasModel = true;
     etag = metaEtag;
@@ -59,6 +67,13 @@ static void loadCacheIfEmpty() {
   free(buf);
 }
 
+// Snapshot buffers for lock-free rendering. drawPage + the e-ink push take
+// 1-2s; holding the state mutex that long stalls the net task while its radio
+// (modem sleep off) burns power, so paint copies the shared state and draws
+// from the copy instead.
+static Model* gPaintModel = nullptr;  // PSRAM
+static AppStatus gPaintSt;
+
 static void paint(bool quality = true) {
   if (cfg.wifiConfigured()) {
     snprintf(st.wifiSsid, sizeof(st.wifiSsid), "%s", cfg.ssid());
@@ -67,10 +82,24 @@ static void paint(bool quality = true) {
     st.wifiSsid[0] = 0;
     st.noWifiConfig = true;
   }
-  StateHold hold;
-  st.page = render::clampPage(model, st.page);
-  render::drawPage(model, st, quality);
-  gBodyUntil = model.nextChangeAt(nowEpoch());
+  {
+    StateHold hold;
+    st.page = render::clampPage(model, st.page);
+    if (!gPaintModel) gPaintModel = (Model*)ps_malloc(sizeof(Model));
+    if (gPaintModel) memcpy(gPaintModel, &model, sizeof(Model));
+    gPaintSt = st;
+  }
+  const Model& view = gPaintModel ? *gPaintModel : model;
+  render::drawPage(view, gPaintSt, quality);
+  gBodyUntil = view.nextChangeAt(nowEpoch());
+}
+
+static void refreshHeaderSafe() {
+  {
+    StateHold hold;
+    gPaintSt = st;
+  }
+  render::refreshHeader(model, gPaintSt);
 }
 
 static void queuePageImages() {
@@ -300,6 +329,13 @@ void loop() {
   if (Serial.available()) gLastSerial = millis();
   handleSerial();
 
+  // The BM8563 is written only from this task (shared I2C bus with touch).
+  // Re-mirror after every NTP sync; also covers the HTTP-Date seed path.
+  if (!gRtcMirrored && timeValid()) {
+    timeMirrorToRtc();
+    gRtcMirrored = true;
+  }
+
   if (M5.BtnB.wasPressed()) {
     uint32_t t = millis();
     if (gLastBtnB && t - gLastBtnB < 500) {
@@ -326,8 +362,7 @@ void loop() {
       paint(true);  // 18:00-20:00 → 20:00-22:00 without waiting for fetch
       queuePageImages();
     } else {
-      StateHold hold;
-      render::refreshHeader(model, st);
+      refreshHeaderSafe();
     }
   }
 
@@ -337,14 +372,14 @@ void loop() {
     if (ev == kNetEvtFetchOk || ev == kNetEvtFetchFail) full = true;
     else if (ev == kNetEvtImg) fast = true;
     else if (ev == kNetEvtWifi || ev == kNetEvtNtp) head = true;
+    if (ev == kNetEvtNtp) gRtcMirrored = false;
   }
   if (full) {
     paint(true);
   } else if (fast) {
     paint(false);
   } else if (head) {
-    StateHold hold;
-    render::refreshHeader(model, st);
+    refreshHeaderSafe();
   }
 
   bool waitDbl = gLastBtnB && (millis() - gLastBtnB < 500);

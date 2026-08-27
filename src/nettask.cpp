@@ -64,21 +64,41 @@ static void post(NetEvt ev) {
   xQueueSend(sEvtQ, &b, 0);
 }
 
-static void scheduleNextFetch(bool ok) {
+// Backoff gates are kept in millis() (monotonic even before NTP), so a stuck
+// 1970 clock can never turn retry sleeps into a busy reconnect loop.
+static uint32_t sFailDelay = kRetrySecs;  // doubles per failure, reset on success
+static uint32_t sRetryAfterMs = 0;        // millis() gate after a failed fetch
+static uint32_t sNtpDelay = 60;           // NTP failure backoff
+static uint32_t sNtpAfterMs = 0;          // millis() gate after a failed NTP sync
+
+static bool gatePassed(uint32_t atMs) {
+  if (atMs == 0) return true;  // no gate set (0 is also the post-success reset)
+  return (int32_t)(millis() - atMs) >= 0;
+}
+
+static void scheduleNextFetch() {
   uint32_t now = nowEpoch();
-  uint32_t next;
-  if (ok) {
-    struct tm lt;
-    time_t t = now;
-    localtime_r(&t, &lt);
-    uint32_t dayStart = now - (lt.tm_hour * 3600 + lt.tm_min * 60 + lt.tm_sec);
-    next = dayStart + 3600 * (lt.tm_hour + 1) + 60 * kFetchAtMinute;
-    if (next <= now) next += 3600;
-  } else {
-    next = now + kRetrySecs;
-  }
+  struct tm lt;
+  time_t t = now;
+  localtime_r(&t, &lt);
+  uint32_t dayStart = now - (lt.tm_hour * 3600 + lt.tm_min * 60 + lt.tm_sec);
+  uint32_t next = dayStart + 3600 * (lt.tm_hour + 1) + 60 * kFetchAtMinute;
+  if (next <= now) next += 3600;
   StateHold hold;
   sSt->nextFetch = next;
+}
+
+static void noteFetchOk() {
+  sFailDelay = kRetrySecs;
+  sRetryAfterMs = 0;
+  scheduleNextFetch();
+}
+
+static void noteFetchFail() {
+  sRetryAfterMs = millis() + sFailDelay * 1000UL;
+  if (sFailDelay < 1800) sFailDelay *= 2;
+  StateHold hold;
+  sSt->nextFetch = nowEpoch() + sFailDelay;
 }
 
 static bool fetchCompact(bool force) {
@@ -97,7 +117,7 @@ static bool fetchCompact(bool force) {
       sSt->offline = false;
       sSt->lastFetchOk = nowEpoch();
     }
-    scheduleNextFetch(true);
+    noteFetchOk();
     return true;
   }
   if (code != 200 || body.length() < 16) return false;
@@ -121,9 +141,10 @@ static bool fetchCompact(bool force) {
     *sEtag = newEtag;
     sSt->offline = false;
     sSt->lastFetchOk = nowEpoch();
+    if (timeValid()) sSt->timeOk = true;  // HTTP Date may have seeded the clock
     imgQueuePage(*sModel, sSt->page);
   }
-  scheduleNextFetch(true);
+  noteFetchOk();
   return true;
 }
 
@@ -158,11 +179,17 @@ static void netTask(void*) {
     }
 
     uint32_t now = nowEpoch();
-    bool fetchDue = false, needNtp = false;
+    bool fetchDue, needNtp;
     {
       StateHold hold;
-      fetchDue = sCfg->autoFetch() && (sForceFetch || now >= sSt->nextFetch);
-      needNtp = !sSt->timeOk;
+      // Fetch runs before NTP: a successful response's HTTP Date header can
+      // seed the clock, which often makes the NTP attempt unnecessary.
+      fetchDue = sCfg->autoFetch() &&
+                 (sForceFetch || (now >= sSt->nextFetch && gatePassed(sRetryAfterMs)));
+      // timeValid() (not st.timeOk) drives NTP: any clock source counts, and
+      // the millis gate keeps a blocked-NTP network from re-keying the radio
+      // in a tight loop.
+      needNtp = !timeValid() && gatePassed(sNtpAfterMs);
     }
     bool imgs = sForceImgs || imgPending();
     if (!fetchDue && !imgs && !needNtp && !sForceFetch) {
@@ -176,7 +203,7 @@ static void netTask(void*) {
     if (!ensureRadio()) {
       sForceFetch = false;
       sForceImgs = false;
-      scheduleNextFetch(false);
+      noteFetchFail();
       post(kNetEvtFetchFail);
       wifiRadioOff();
       sBusy = false;
@@ -184,33 +211,35 @@ static void netTask(void*) {
       continue;
     }
 
-    if (needNtp) {
+    if (fetchDue || sForceFetch) {
+      bool forced = sForceFetch;
+      sForceFetch = false;
+      bool ok = fetchCompact(forced);
+      if (!ok) {
+        {
+          StateHold hold;
+          sSt->offline = true;
+        }
+        noteFetchFail();
+        post(kNetEvtFetchFail);
+      } else {
+        post(kNetEvtFetchOk);
+      }
+    }
+
+    if (needNtp && !timeValid()) {
       bool t = timeSyncNtp(12000);
       {
         StateHold hold;
         sSt->timeOk = t;
       }
-      if (t) post(kNetEvtNtp);
-    }
-
-    if (fetchDue || sForceFetch) {
-      bool forced = sForceFetch;
-      sForceFetch = false;
-      static uint32_t lastAttempt = 0;
-      now = nowEpoch();
-      if (forced || lastAttempt == 0 || now - lastAttempt >= 30) {
-        lastAttempt = now;
-        bool ok = fetchCompact(forced);
-        if (!ok) {
-          {
-            StateHold hold;
-            sSt->offline = true;
-          }
-          scheduleNextFetch(false);
-          post(kNetEvtFetchFail);
-        } else {
-          post(kNetEvtFetchOk);
-        }
+      if (t) {
+        sNtpDelay = 60;
+        sNtpAfterMs = 0;
+        post(kNetEvtNtp);
+      } else {
+        sNtpAfterMs = millis() + sNtpDelay * 1000UL;
+        if (sNtpDelay < 1800) sNtpDelay *= 2;
       }
     }
 

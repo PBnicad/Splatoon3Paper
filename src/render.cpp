@@ -93,36 +93,6 @@ static void drawText(int x, int y, const char* s, uint8_t fg, uint8_t bg) {
   font24.draw(&page, x, y, s, fg, bg);
 }
 
-static int wrapText(const char* s, int maxWidth, char* lines, int maxLines,
-                    int lineCap) {
-  int n = 0;
-  const char* p = s;
-  while (*p && n < maxLines) {
-    char* out = lines + (size_t)n * lineCap;
-    out[0] = 0;
-    int w = 0;
-    while (*p) {
-      const char* glyphStart = p;
-      utf8Next(p);
-      size_t glen = (size_t)(p - glyphStart);
-      char tmp[8];
-      if (glen >= sizeof(tmp)) break;
-      memcpy(tmp, glyphStart, glen);
-      tmp[glen] = 0;
-      int gw = font24.textWidth(tmp);
-      if (w + gw > maxWidth) break;
-      size_t olen = strlen(out);
-      if (olen + glen >= (size_t)lineCap) break;
-      memcpy(out + olen, glyphStart, glen);
-      out[olen + glen] = 0;
-      w += gw;
-    }
-    if (!out[0]) break;
-    ++n;
-  }
-  return n;
-}
-
 // ---------------------------------------------------------------- header --
 
 static void drawHeaderInto(M5Canvas* c, const Model& m, const AppStatus& st) {
@@ -577,43 +547,6 @@ static void drawP3(const Model& m) {
 }
 
 // ---------------------------------------------------- page 4 events & fest --
-
-static int drawEventCard(int y, const EventItem& e) {
-  bool active = e.st <= nowEpoch() && nowEpoch() < e.et;
-  char meta[96], a[24], b[24];
-  fmtHM(e.st, a, sizeof(a));
-  fmtHM(e.et, b, sizeof(b));
-  snprintf(meta, sizeof(meta), "%s%s ~ %s", active ? ui::NowOpen : "", a, b);
-
-  page.drawRoundRect(12, y, kW - 24, 8, 4, C_MID);
-  font24.drawEllipsis(&page, 24, y + 8, e.n, C_BLACK, C_WHITE, kW - 250);
-  int mw = font24.textWidth(meta);
-  font24.draw(&page, kW - 24 - mw, y + 8, meta, active ? C_BLACK : C_MID, C_WHITE);
-
-  char line[128];
-  snprintf(line, sizeof(line), "%s · %s · %s", e.rn, e.s1, e.s2);
-  int yb = y + 8 + kLine24;
-  font24.drawEllipsis(&page, 24, yb, line, C_DARK, C_WHITE, kW - 60);
-
-  char lines[3][80];
-  int nl = wrapText(e.d, kW - 60, lines[0], 2, sizeof(lines[0]));
-  int yd = yb + kLine24;
-  for (int i = 0; i < nl; ++i) font24.draw(&page, 24, yd + i * kLine24, lines[i], C_GRAY, C_WHITE);
-  y = yd + nl * kLine24;
-
-  nl = wrapText(e.r, kW - 60, lines[0], 3, sizeof(lines[0]));
-  for (int i = 0; i < nl; ++i) font24.draw(&page, 24, y + i * kLine24, lines[i], C_MID, C_WHITE);
-  y += nl * kLine24;
-
-  int np = e.np > 6 ? 6 : e.np;
-  for (int i = 0; i < np; ++i) {
-    char range[32];
-    fmtRange(e.p[i].st, e.p[i].et, range, sizeof(range));
-    bool now = e.p[i].st <= nowEpoch() && nowEpoch() < e.p[i].et;
-    font24.draw(&page, 40, y + i * kLine24, range, now ? C_BLACK : C_MID, C_WHITE);
-  }
-  return y + np * kLine24 + 14;
-}
 
 static int drawFestTeams(int y, const Team* teams, int n) {
   if (n <= 0) return y;
