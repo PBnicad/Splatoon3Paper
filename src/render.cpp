@@ -402,6 +402,10 @@ static void drawGearPage(const Model& m) {
 static void drawAboutPage(const Model& m) {
   drawPageTitle(ui::AboutTitle);
   font24.draw(&page, 24, kContentY, ui::AppTitle, C_BLACK, C_WHITE);
+  // FW_VERSION is x.y.z Latin/digits — always present in the URL glyphs
+  const char* ver = "v" FW_VERSION;
+  font24.draw(&page, kW - 24 - font24.textWidth(ver), kContentY + kInk24 + 4,
+              ver, C_GRAY, C_WHITE);
 
   static const char* lines[] = {
       "把 splatoon3.ink 的对战、鲑鱼跑、活动与祭典",

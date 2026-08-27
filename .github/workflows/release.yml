@@ -1,0 +1,95 @@
+# 发版 — 推送 vX.Y.Z tag 自动构建固件并发布 GitHub Release。
+#
+# 版本号唯一来源：platformio.ini 的 custom_fw_version。
+# 流程：校验 tag 与 ini 一致 → pio run + buildfs → 打包 zip（含烧录说明）
+#      → 创建 Release（自动生成 changelog）。
+# 首次发版：git tag v1.0.0 && git push origin v1.0.0
+name: Release firmware
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build & publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify tag matches custom_fw_version
+        run: |
+          VER=$(python3 - <<'EOF'
+          import re
+          ini = open("platformio.ini", encoding="utf-8").read()
+          m = re.search(r"^custom_fw_version\s*=\s*(\S+)\s*$", ini, re.M)
+          print(m.group(1) if m else "")
+          EOF
+          )
+          echo "ini version: $VER"
+          if [ -z "$VER" ]; then echo "::error::custom_fw_version missing in platformio.ini"; exit 1; fi
+          if [ "${GITHUB_REF_NAME}" != "v${VER}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match platformio.ini v${VER}"
+            exit 1
+          fi
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            .pio
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+          restore-keys: |
+            pio-${{ runner.os }}-
+
+      - run: pip install --upgrade platformio
+      - run: pio run               # firmware.bin / partitions.bin / bootloader.bin
+      - run: pio run -t buildfs    # littlefs.bin（中文字库）
+
+      - name: Package
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          mkdir -p dist
+          B=.pio/build/m5paper
+          for f in bootloader.bin partitions.bin firmware.bin littlefs.bin; do
+            test -f "$B/$f" || { echo "::error::missing $B/$f"; exit 1; }
+            cp "$B/$f" "dist/${TAG}-$f"
+          done
+          cat > dist/FLASHING.md <<'MD'
+          # M5Paper 固件烧录说明
+
+          全部 4 个镜像来自同一次构建，请配套使用。
+
+          ```bash
+          pip install esptool
+          esptool.py --chip esp32 --port <COM口> --baud 460800 write_flash \
+            0x1000  BOOTLOADER \
+            0x8000  PARTITIONS \
+            0x10000 FIRMWARE \
+            0x400000 LITTLEFS
+          ```
+
+          把占位替换为下载的四个 bin 文件名。无 esptool 时可用 PlatformIO：
+          `pio run -t upload` / `pio run -t uploadfs`（需源码，镜像放入 .pio/build/m5paper/ 与 data/）。
+          MD
+          sed -i "s|BOOTLOADER|${TAG}-bootloader.bin|; s|PARTITIONS|${TAG}-partitions.bin|; s|FIRMWARE|${TAG}-firmware.bin|; s|LITTLEFS|${TAG}-littlefs.bin|" dist/FLASHING.md
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true
