@@ -63,7 +63,31 @@ pio device monitor         # 串口 115200
 wifi 你的SSID 你的密码
 ```
 
-其他串口命令：`refetch`（强制刷新）、`page N`、`sleep`（息屏）、`status`。
+其他串口命令：`refetch`（强制刷新）、`page N`、`sleep`（息屏）、`status`（含固件版本）、
+`shot`（截屏）。
+
+截屏协议（SNAP V2）：固件把画布快照到 PSRAM 后回传 `#SNAP V2 540 960 4BPP <len> <crc32>`
+帧 + 打包 4bpp 原始数据 + CRC32 校验。上位机一条命令出图（命令在空闲轻睡期可能被丢，
+工具会自动重试直到应答，帧不完整自动整帧重传）：
+
+```bash
+python tools/preview/dump_screen.py --port COM9 --cmd "page 0" --out shot.png
+```
+
+## 版本与发版
+
+- 固件版本唯一来源：`platformio.ini` 的 `custom_fw_version`，构建时经
+  `scripts/version.py` 注入 `FW_VERSION` 宏；启动串口横幅与「设置 → 关于」页会显示
+  `vX.Y.Z`。
+- 发版：把版本号改好并合并到 master 后，推送对应 tag 即自动构建发布：
+
+  ```bash
+  git tag v1.0.0 && git push origin v1.0.0
+  ```
+
+  GitHub Actions（release.yml）会校验 tag 与 `custom_fw_version` 一致，编译固件 +
+  LittleFS 字库镜像，打包成 Release 附件：四个 bin（bootloader / partitions /
+  firmware / littlefs）+ `FLASHING.md` 烧录说明。
 
 字库更新流程：改了固件里的 UI 文案后：
 

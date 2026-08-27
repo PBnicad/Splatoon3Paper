@@ -22,6 +22,7 @@
 #include "power.h"
 #include "render.h"
 #include "timekeeper.h"
+#include "version.h"
 #include "wifiui.h"
 
 static Config cfg;
@@ -258,7 +259,8 @@ static void handleSerial() {
         ESP.restart();
       } else if (line == "status") {
         StateHold hold;
-        Serial.printf("page=%d wifi=%d offline=%d hasModel=%d gen=%lu nf=%lu modes=%d events=%d shifts=%d egg=%d gear=%d\n",
+        Serial.printf("v%s page=%d wifi=%d offline=%d hasModel=%d gen=%lu nf=%lu modes=%d events=%d shifts=%d egg=%d gear=%d\n",
+                      FW_VERSION,
                       st.page, st.wifiOk, st.offline, hasModel,
                       (unsigned long)model.gen, (unsigned long)model.nf,
                       model.nModes, model.nEvents, model.nShifts,
@@ -293,6 +295,7 @@ void setup() {
   cfg.begin();
   timeSeedFromRtc();
   st.battery = powerBatteryPercent();
+  Serial.printf("[app] firmware v%s\n", FW_VERSION);
 
   if (!render::begin()) {
     Serial.println("[app] FATAL canvas alloc failed");

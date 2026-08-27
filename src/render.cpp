@@ -401,6 +401,10 @@ static void drawGearPage(const Model& m) {
 
 static void drawAboutPage(const Model& m) {
   drawPageTitle(ui::AboutTitle);
+  // FW_VERSION is x.y.z Latin/digits — always present in the URL glyphs.
+  // Sits in the title row so it can't collide with the body text below.
+  const char* ver = "v" FW_VERSION;
+  font24.draw(&page, kW - 24 - font24.textWidth(ver), kTitleY, ver, C_GRAY, C_WHITE);
   font24.draw(&page, 24, kContentY, ui::AppTitle, C_BLACK, C_WHITE);
 
   static const char* lines[] = {
@@ -714,19 +718,32 @@ int settingsHit(int x, int y, bool about) {
 }
 
 bool dumpCanvas() {
-  const uint8_t* buf = (const uint8_t*)page.getBuffer();
+  // Snapshot first so later paints can't corrupt the transfer, then stream
+  // the packed 4bpp buffer framed with a length + CRC32 (host verifies).
+  static uint8_t* snap = nullptr;
+  if (!snap) snap = (uint8_t*)ps_malloc(kW * kH / 2);
+  const uint8_t* buf = snap ? snap : (const uint8_t*)page.getBuffer();
   if (!buf) return false;
-  // 4bpp packed (high nibble first), row-major → 8-bit gray PGM P5
-  Serial.print("P5\n540 960\n255\n");
-  uint8_t out[540];
-  for (int y = 0; y < 960; ++y) {
-    const uint8_t* row = buf + (y * 540 * 4) / 8;
-    for (int x = 0; x < 540; ++x) {
-      uint8_t b = row[x >> 1];
-      out[x] = (((x & 1) ? (b & 0x0F) : (b >> 4)) << 4) | 0x0F;
-    }
-    Serial.write(out, sizeof(out));
+  if (snap) memcpy(snap, page.getBuffer(), kW * kH / 2);
+  const size_t len = kW * kH / 2;
+  uint32_t crc = 0xFFFFFFFFu;
+  for (size_t i = 0; i < len; ++i) {
+    crc ^= snap[i];
+    for (int k = 0; k < 8; ++k) crc = (crc >> 1) ^ ((-(int32_t)(crc & 1)) & 0xEDB88320u);
   }
+  crc = ~crc;
+
+  Serial.printf("#SNAP V2 %d %d 4BPP %u %08X\n", kW, kH, (unsigned)len, crc);
+  Serial.flush();
+  const uint8_t* p = buf;
+  size_t left = len;
+  while (left) {
+    size_t n = left < 512 ? left : 512;
+    Serial.write(p, n);
+    p += n;
+    left -= n;
+  }
+  Serial.printf("\n#SNAP END %08X\n", crc);
   return true;
 }
 
