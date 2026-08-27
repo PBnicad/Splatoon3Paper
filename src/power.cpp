@@ -39,6 +39,9 @@ void powerIdleSleep(uint32_t maxMs) {
   // ESP32 EXT1 has no ANY_LOW. Touch INT (GPIO 36) is owned by GT911 —
   // stealing it for EXT0 immediately re-wakes. Timer slices + UART RX
   // are enough: wheel/touch are sampled after each slice.
+  // Known limitation: bytes arriving mid-slice are silently dropped
+  // (APB clock gated; esp_sleep_enable_uart_wakeup proved ineffective on
+  // this board), so serial hosts must retry commands until acknowledged.
   if (maxMs < 80) maxMs = 80;
   if (maxMs > 250) maxMs = 250;
   esp_sleep_enable_timer_wakeup((uint64_t)maxMs * 1000ULL);

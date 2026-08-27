@@ -63,7 +63,16 @@ pio device monitor         # 串口 115200
 wifi 你的SSID 你的密码
 ```
 
-其他串口命令：`refetch`（强制刷新）、`page N`、`sleep`（息屏）、`status`（含固件版本）。
+其他串口命令：`refetch`（强制刷新）、`page N`、`sleep`（息屏）、`status`（含固件版本）、
+`shot`（截屏）。
+
+截屏协议（SNAP V2）：固件把画布快照到 PSRAM 后回传 `#SNAP V2 540 960 4BPP <len> <crc32>`
+帧 + 打包 4bpp 原始数据 + CRC32 校验。上位机一条命令出图（命令在空闲轻睡期可能被丢，
+工具会自动重试直到应答，帧不完整自动整帧重传）：
+
+```bash
+python tools/preview/dump_screen.py --port COM9 --cmd "page 0" --out shot.png
+```
 
 ## 版本与发版
 
