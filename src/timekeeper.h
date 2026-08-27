@@ -8,8 +8,11 @@
 
 bool timeValid();
 uint32_t nowEpoch();
-// NTP sync (blocks up to timeoutMs); writes result into the RTC.
+// NTP sync (blocks up to timeoutMs); poll until the system clock is valid.
 bool timeSyncNtp(uint32_t timeoutMs);
+// Mirror a valid system clock into the BM8563 (stored as UTC). UI task only —
+// it shares the I2C bus with the touch controller.
+void timeMirrorToRtc();
 // On boot: if system time is unset, seed it from the RTC.
 void timeSeedFromRtc();
 

@@ -29,6 +29,27 @@ bool cacheBegin() {
   return ok;
 }
 
+// ETag header values contain quotes (e.g. "abc"), so they must be escaped
+// before being embedded in the meta JSON — otherwise the file stops being
+// parseable and the etag is lost on every boot.
+static String jsonEscape(const char* s) {
+  String out;
+  for (const char* p = s ? s : ""; *p; ++p) {
+    if (*p == '"' || *p == '\\') out += '\\';
+    out += *p;
+  }
+  return out;
+}
+
+static String jsonUnescape(const String& s) {
+  String out;
+  for (unsigned i = 0; i < s.length(); ++i) {
+    if (s[i] == '\\' && i + 1 < s.length()) ++i;
+    out += s[i];
+  }
+  return out;
+}
+
 bool cacheSaveCompact(const char* json, size_t len, const char* etag) {
   FsHold hold;
   File f = LittleFS.open(kCompactPath, "w");
@@ -40,7 +61,7 @@ bool cacheSaveCompact(const char* json, size_t len, const char* etag) {
   File m = LittleFS.open(kMetaPath, "w");
   if (m) {
     m.printf("{\"ts\":%lu,\"etag\":\"%s\"}",
-             (unsigned long)time(nullptr), etag ? etag : "");
+             (unsigned long)time(nullptr), jsonEscape(etag).c_str());
     m.close();
   }
   return true;
@@ -75,8 +96,25 @@ bool cacheLoadMeta(uint32_t& fetchedAt, String& etag) {
   if (ts >= 0) fetchedAt = strtoul(s.c_str() + ts + 5, nullptr, 10);
   if (et >= 0) {
     int start = et + 8;
-    int end = s.indexOf('"', start);
-    if (end > start) etag = s.substring(start, end);
+    int end = s.length();
+    bool escaped = false;
+    // scan for the closing quote, honouring \" escapes
+    for (int i = start; i < (int)s.length(); ++i) {
+      char c = s[i];
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (c == '\\') {
+        escaped = true;
+        continue;
+      }
+      if (c == '"') {
+        end = i;
+        break;
+      }
+    }
+    if (end > start) etag = jsonUnescape(s.substring(start, end));
   }
   return fetchedAt > 0;
 }

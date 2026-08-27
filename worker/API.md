@@ -9,12 +9,13 @@ Cloudflare Worker 反向代理 [splatoon3.ink](https://splatoon3.ink) 的公开�
 
 | 路径 | 说明 |
 |---|---|
-| `GET /api/v1/compact` | 设备专用精简 JSON（见下），`Cache-Control: max-age=300` |
+| `GET /api/v1/compact` | 设备专用精简 JSON（见下），`Cache-Control: max-age=300`，带强 `ETag`（body SHA-256 前 24 hex），`If-None-Match` 命中时返回 `304` 空体 |
 | `GET /api/v1/img?k=` | Worker 压缩后的 4bpp 灰度图（SNI1）。`k` 形如 `s:{64hex}_{0\|1}` / `w:` / `g:` / `b:buddy` |
 | `GET /data/<file>` | splatoon3.ink 原样透传（仅 `/data/` 白名单路径），`max-age=600` |
 | `GET /healthz` | 存活探测 |
 
 响应头 `X-Cache: HIT|MISS|STALE` 表明边缘缓存/影子缓存命中情况。
+`?nocache=1` 可跳过 compact 边缘缓存强制重建（缓存键不含该参数）。
 
 ## /api/v1/compact 结构（v1）
 
@@ -86,6 +87,8 @@ Cloudflare Worker 反向代理 [splatoon3.ink](https://splatoon3.ink) 的公开�
 - 名称本地化：`locale/zh-CN.json` 按 id（base64 或 `__splatoon3ink_id`）映射，
   活动条目键为 `base64("LeagueMatchEvent-" + leagueMatchEventId)`，英文兜底。
 - 文本 `desc/regulation` 去除 `<br />`（站点 br2nl 正则）。
+- 所有文本字段按设备端定长缓冲做 UTF-8 字节预算截断（码点边界对齐），
+  避免固件 `snprintf` 从多字节字符中间截断产生乱码。
 
 ## 安全
 

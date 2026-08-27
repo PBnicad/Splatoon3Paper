@@ -98,10 +98,32 @@ const UPSTREAM_FILES = [
   ["coop", "/data/coop.json"],
 ];
 
-async function handleCompact(url, ctx) {
+/** Strong ETag from the body, so the device's If-None-Match turns the
+ *  hourly poll into a 304 with no body transfer. */
+async function bodyEtag(text) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  return `"c-${hex.slice(0, 24)}"`;
+}
+
+function notModified(etag) {
+  return new Response(null, {
+    status: 304,
+    headers: { ETag: etag, "Cache-Control": "public, max-age=300" },
+  });
+}
+
+async function handleCompact(request, url, ctx) {
+  const inm = request.headers.get("If-None-Match");
   const cache = caches.default;
-  const hit = await cacheGet(cache, url);
-  if (hit && !url.searchParams.has("nocache")) return rewrap(hit, "HIT");
+  // Canonical cache key: ?nocache must not fork the cache namespace.
+  const cacheUrl = new URL(url);
+  cacheUrl.searchParams.delete("nocache");
+  const hit = await cacheGet(cache, cacheUrl);
+  if (hit && !url.searchParams.has("nocache")) {
+    if (inm && inm === hit.headers.get("ETag")) return notModified(inm);
+    return rewrap(hit, "HIT");
+  }
   try {
     const parts = await Promise.all(
       UPSTREAM_FILES.map(async ([key, path]) => {
@@ -111,21 +133,28 @@ async function handleCompact(url, ctx) {
     );
     const input = Object.fromEntries(parts);
     const compact = buildCompact({ ...input, nowMs: Date.now() });
-    const out = jsonReply(compact, 200, {
-      "Cache-Control": "public, max-age=300",
-      "X-Cache": "MISS",
+    const body = JSON.stringify(compact);
+    const etag = await bodyEtag(body);
+    if (inm && inm === etag) return notModified(etag);
+    const out = new Response(body, {
+      status: 200,
+      headers: {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "public, max-age=300",
+        ETag: etag,
+        "X-Cache": "MISS",
+      },
     });
     const fresh = out.clone();
-    fresh.headers.set("Cache-Control", "public, max-age=300");
     const stale = out.clone();
     stale.headers.set("Cache-Control", `public, max-age=${SHADOW_TTL}`);
     ctx.waitUntil(Promise.all([
-      cache.put(new Request(url), fresh),
-      cache.put(new Request(shadowUrl(url)), stale),
+      cache.put(new Request(cacheUrl, { method: "GET" }), fresh),
+      cache.put(new Request(shadowUrl(cacheUrl), { method: "GET" }), stale),
     ]));
     return out;
   } catch (e) {
-    const stale = await cacheGet(cache, shadowUrl(url));
+    const stale = await cacheGet(cache, shadowUrl(cacheUrl));
     if (stale) return rewrap(stale, "STALE");
     return jsonReply({ error: "upstream unavailable", detail: String(e?.message || e) }, 502);
   }
@@ -163,7 +192,7 @@ export default {
       return jsonReply({ ok: true, ts: Math.floor(Date.now() / 1000) });
     }
     if (url.pathname === "/api/v1/compact" || url.pathname === "/api/v1/compact/") {
-      return handleCompact(url, ctx);
+      return handleCompact(request, url, ctx);
     }
     if (url.pathname === "/api/v1/img" || url.pathname === "/api/v1/img/") {
       return handleImg(url, ctx);

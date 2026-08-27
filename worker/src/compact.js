@@ -17,6 +17,25 @@ const br2nl = (s) => (typeof s === "string" ? s.replace(BR_RE, "\n") : s);
 const epoch = (iso) => (iso ? Math.floor(Date.parse(iso) / 1000) : null);
 const pick = (v, fallback) => (v === undefined || v === null || v === "" ? fallback : v);
 
+const utf8 = new TextEncoder();
+
+/** Truncate by UTF-8 byte budget on a code-point boundary. The firmware's
+ *  fixed-size char buffers cut mid-codepoint with snprintf; cut here instead
+ *  so the device never renders a broken glyph at the end of long fields. */
+function cutUtf8(s, maxBytes) {
+  if (typeof s !== "string" || s === "") return s ?? "";
+  if (utf8.encode(s).length <= maxBytes) return s;
+  let used = 0;
+  let out = "";
+  for (const cp of s) {
+    const b = utf8.encode(cp).length;
+    if (used + b > maxBytes) break;
+    used += b;
+    out += cp;
+  }
+  return out;
+}
+
 const isUpcoming = (startTime, nowMs) =>
   startTime ? Date.parse(startTime) > nowMs : false;
 
@@ -42,12 +61,12 @@ function locName(table, id, fallback) {
 function vsSlot(node, setting, loc) {
   const rule = setting.vsRule;
   const vs = setting.vsStages || [];
-  const stages = vs.map((s) => locName(loc?.stages, s.id, s.name));
+  const stages = vs.map((s) => cutUtf8(locName(loc?.stages, s.id, s.name), 39));
   return {
     st: epoch(node.startTime),
     et: epoch(node.endTime),
     rule: rule?.rule ?? null,
-    rn: locName(loc?.rules, rule?.id, rule?.name ?? ""),
+    rn: cutUtf8(locName(loc?.rules, rule?.id, rule?.name ?? ""), 27),
     s: stages,
     si: vs.map((s) => imgKey(s.image?.url, "s")),
   };
@@ -101,11 +120,11 @@ function buildEvents(data, loc, nowMs) {
     out.push({
       st,
       et,
-      n: pick(le?.name, ev.name ?? ""),
-      d: br2nl(pick(le?.desc, ev.desc ?? "")).slice(0, 80),
-      r: br2nl(pick(le?.regulation, ev.regulation ?? "")).slice(0, 160),
-      rn: locName(loc?.rules, ls.vsRule.id, ls.vsRule.name ?? ""),
-      s: (ls.vsStages || []).map((x) => locName(loc?.stages, x.id, x.name)),
+      n: cutUtf8(pick(le?.name, ev.name ?? ""), 46),      // firmware: char n[48]
+      d: cutUtf8(br2nl(pick(le?.desc, ev.desc ?? "")), 190),   // char d[200]
+      r: cutUtf8(br2nl(pick(le?.regulation, ev.regulation ?? "")), 250), // char r[260]
+      rn: cutUtf8(locName(loc?.rules, ls.vsRule.id, ls.vsRule.name ?? ""), 27), // char rn[28]
+      s: (ls.vsStages || []).map((x) => cutUtf8(locName(loc?.stages, x.id, x.name), 39)), // char s[40]
       si: (ls.vsStages || []).map((x) => imgKey(x.image?.url, "s")),
       p: periods.slice(0, 4),
     });
@@ -128,10 +147,10 @@ function coopShift(node, isBigRun, loc) {
   return {
     st: epoch(node.startTime),
     et: epoch(node.endTime),
-    stage: locName(loc?.stages, s.coopStage?.id, s.coopStage?.name ?? ""),
+    stage: cutUtf8(locName(loc?.stages, s.coopStage?.id, s.coopStage?.name ?? ""), 39),
     si: imgKey(s.coopStage?.thumbnailImage?.url || s.coopStage?.image?.url, "s"),
-    boss: s.boss ? locName(loc?.bosses, s.boss.id, s.boss.name ?? "") : null,
-    w: weapons.map(weaponName),
+    boss: s.boss ? cutUtf8(locName(loc?.bosses, s.boss.id, s.boss.name ?? ""), 23) : null,
+    w: weapons.map((x) => cutUtf8(weaponName(x), 31)),
     wi: weapons.map((x) => imgKey(x?.image?.url, "w")),
     big: !!isBigRun,
     mys: weapons.some((x) => x?.name === "Random"),
@@ -175,7 +194,7 @@ function decodeFestShortId(graphqlId) {
 
 function festTeam(t, locTeam) {
   return {
-    n: pick(locTeam?.teamName, t.teamName ?? ""),
+    n: cutUtf8(pick(locTeam?.teamName, t.teamName ?? ""), 27),
     c: rgb255(t.color),
   };
 }
@@ -195,11 +214,11 @@ function buildCurrentFest(cf, loc) {
     st: epoch(cf.startTime),
     et: epoch(cf.endTime),
     mt: epoch(cf.midtermTime),
-    title: pick(lf?.title, cf.title ?? ""),
+    title: cutUtf8(pick(lf?.title, cf.title ?? ""), 71),
     teams: (cf.teams || []).map((t, i) =>
       festTeam(t, Array.isArray(lf?.teams) ? lf.teams[i] : lf?.teams?.[String(i)]),
     ),
-    tri: triSrc.map((x) => locName(loc?.stages, x.id, x.name ?? "")),
+    tri: triSrc.map((x) => cutUtf8(locName(loc?.stages, x.id, x.name ?? ""), 39)),
   };
 }
 
@@ -236,7 +255,7 @@ function buildFestHistory(festivalsData, loc, nowMs) {
     return {
       st: epoch(node.startTime),
       et: epoch(node.endTime),
-      title: pick(lf?.title, node.title ?? ""),
+      title: cutUtf8(pick(lf?.title, node.title ?? ""), 71),
       teams,
     };
   };
@@ -261,11 +280,11 @@ function buildGear(gearData, loc) {
     const gear = g.gear || {};
     const power = gear.primaryGearPower || {};
     return {
-      n: locName(loc?.gear, gear.__splatoon3ink_id, gear.name ?? ""),
+      n: cutUtf8(locName(loc?.gear, gear.__splatoon3ink_id, gear.name ?? ""), 43),
       p: g.price ?? null,
       et: epoch(g.saleEndTime),
       k: gear.__typename ?? null,
-      pn: locName(loc?.powers, power.__splatoon3ink_id, power.name ?? ""),
+      pn: cutUtf8(locName(loc?.powers, power.__splatoon3ink_id, power.name ?? ""), 25),
       i: imgKey(gear.image?.url, "g"),
     };
   });
@@ -274,7 +293,7 @@ function buildGear(gearData, loc) {
 function buildMonthlyGear(coopData, loc) {
   const mg = coopData?.data?.coopResult?.monthlyGear;
   if (!mg) return null;
-  return { n: locName(loc?.gear, mg.__splatoon3ink_id, mg.name ?? "") };
+  return { n: cutUtf8(locName(loc?.gear, mg.__splatoon3ink_id, mg.name ?? ""), 43) };
 }
 
 /**

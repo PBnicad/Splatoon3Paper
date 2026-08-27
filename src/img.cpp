@@ -8,6 +8,7 @@
 #include "cache.h"
 #include "config.h"
 #include "net.h"
+#include "pix4.h"
 #include "render.h"
 #include "timekeeper.h"
 
@@ -87,6 +88,8 @@ static void blit(M5Canvas* dst, int x, int y, int dw, int dh,
     if (srcW > sw) srcW = sw;
     srcX0 = (sw - srcW) / 2;
   }
+  pix4::Acc acc;
+  bool fast = pix4::init(dst, acc);
   for (int dy = 0; dy < dh; dy++) {
     int sy = srcY0 + (int)((int32_t)dy * srcH / dh);
     if (sy < 0) sy = 0;
@@ -99,7 +102,8 @@ static void blit(M5Canvas* dst, int x, int y, int dw, int dh,
       if ((size_t)(i >> 1) >= pixLen) continue;
       uint8_t byte = pix[i >> 1];
       uint8_t n = (i & 1) ? (byte & 0x0F) : (byte >> 4);
-      dst->drawPixel(x + dx, y + dy, n);
+      if (fast) pix4::put(acc, x + dx, y + dy, n);
+      else dst->drawPixel(x + dx, y + dy, n);
     }
   }
 }
@@ -183,19 +187,23 @@ int imgPrefetchKey(const char* key) {
   return code;
 }
 
-static void addKey(const char** list, int& n, int cap, const char* k) {
-  if (!k || !k[0] || n >= cap) return;
-  for (int i = 0; i < n; i++)
-    if (!strcmp(list[i], k)) return;
-  list[n++] = k;
-}
-
-static const char* gQueue[64];
+// The queue stores key copies, not pointers into Model: the UI task can
+// rebuild the queue (page turn) while the net task is mid-download, and the
+// model itself is replaced under the state lock after each successful fetch.
+static char gQueue[64][80];
 static int gQn = 0, gQi = 0;
 
-static void addSlot(const char** list, int& n, int cap, const Slot& s) {
-  addKey(list, n, cap, s.si1);
-  addKey(list, n, cap, s.si2);
+static void addKey(const char* k) {
+  if (!k || !k[0] || gQn >= 64) return;
+  for (int i = 0; i < gQn; i++)
+    if (!strcmp(gQueue[i], k)) return;
+  snprintf(gQueue[gQn], sizeof(gQueue[gQn]), "%s", k);
+  ++gQn;
+}
+
+static void addSlot(const Slot& s) {
+  addKey(s.si1);
+  addKey(s.si2);
 }
 
 void imgQueue(const Model& m) {
@@ -203,24 +211,24 @@ void imgQueue(const Model& m) {
   gQi = 0;
   // Visible-now first: current slots, current salmon, gear, events.
   for (int i = 0; i < m.nModes; i++) {
-    if (m.modes[i].hasA) addSlot(gQueue, gQn, 64, m.modes[i].a);
+    if (m.modes[i].hasA) addSlot(m.modes[i].a);
   }
   if (m.nShifts > 0) {
-    addKey(gQueue, gQn, 64, m.shifts[0].si);
-    for (int w = 0; w < 4; w++) addKey(gQueue, gQn, 64, m.shifts[0].wi[w]);
+    addKey(m.shifts[0].si);
+    for (int w = 0; w < 4; w++) addKey(m.shifts[0].wi[w]);
   }
-  for (int i = 0; i < m.nGear && i < 6; i++) addKey(gQueue, gQn, 64, m.gear[i].img);
+  for (int i = 0; i < m.nGear && i < 6; i++) addKey(m.gear[i].img);
   for (int i = 0; i < m.nEvents && i < 2; i++) {
-    addKey(gQueue, gQn, 64, m.events[i].si1);
-    addKey(gQueue, gQn, 64, m.events[i].si2);
+    addKey(m.events[i].si1);
+    addKey(m.events[i].si2);
   }
   // Then one upcoming slot per mode, then remaining salmon.
   for (int i = 0; i < m.nModes; i++) {
-    if (m.modes[i].nu > 0) addSlot(gQueue, gQn, 64, m.modes[i].u[0]);
+    if (m.modes[i].nu > 0) addSlot(m.modes[i].u[0]);
   }
   for (int i = 1; i < m.nShifts && i < 4; i++) {
-    addKey(gQueue, gQn, 64, m.shifts[i].si);
-    for (int w = 0; w < 4; w++) addKey(gQueue, gQn, 64, m.shifts[i].wi[w]);
+    addKey(m.shifts[i].si);
+    for (int w = 0; w < 4; w++) addKey(m.shifts[i].wi[w]);
   }
   Serial.printf("[img] queued %d\n", gQn);
 }
@@ -231,7 +239,7 @@ static void addModeVisible(const ModeSlots* mm, int maxSlots) {
   int added = 0;
   auto take = [&](const Slot& s) {
     if (!s.st || s.et <= now || added >= maxSlots) return;
-    addSlot(gQueue, gQn, 64, s);
+    addSlot(s);
     ++added;
   };
   if (mm->hasA) take(mm->a);
@@ -259,23 +267,23 @@ void imgQueuePage(const Model& m, int page) {
       break;
     case render::kPageEvents:
       for (int i = 0; i < m.nEvents && i < 2; i++) {
-        addKey(gQueue, gQn, 64, m.events[i].si1);
-        addKey(gQueue, gQn, 64, m.events[i].si2);
+        addKey(m.events[i].si1);
+        addKey(m.events[i].si2);
       }
       break;
     case render::kPageSalmon: {
       int i0 = m.liveShiftIndex(now);
       if (i0 < 0) i0 = 0;
       for (int i = i0; i < m.nShifts && i < i0 + 3; i++) {
-        addKey(gQueue, gQn, 64, m.shifts[i].si);
+        addKey(m.shifts[i].si);
         if (i == i0) {
-          for (int w = 0; w < 4; w++) addKey(gQueue, gQn, 64, m.shifts[i].wi[w]);
+          for (int w = 0; w < 4; w++) addKey(m.shifts[i].wi[w]);
         }
       }
       break;
     }
     case render::kPageGear:
-      for (int i = 0; i < m.nGear && i < 6; i++) addKey(gQueue, gQn, 64, m.gear[i].img);
+      for (int i = 0; i < m.nGear && i < 6; i++) addKey(m.gear[i].img);
       break;
     default:
       break;

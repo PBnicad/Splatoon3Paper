@@ -3,6 +3,8 @@
 #include <Arduino.h>
 #include <LittleFS.h>
 
+#include "pix4.h"
+
 FontFace font24, font40, font96;
 
 uint32_t utf8Next(const char*& p) {
@@ -113,6 +115,8 @@ int FontFace::textWidth(const char* utf8) const {
 int FontFace::draw(M5Canvas* dst, int x, int y, const char* utf8,
                    uint8_t fg, uint8_t bg) const {
   if (!valid()) return 0;
+  pix4::Acc acc;
+  bool fast = pix4::init(dst, acc);
   int pen = x;
   const char* p = utf8;
   while (*p) {
@@ -130,7 +134,8 @@ int FontFace::draw(M5Canvas* dst, int x, int y, const char* utf8,
         uint8_t a = (i & 1) ? (byte & 0x0F) : (byte >> 4);
         if (!a) continue;
         uint8_t c = (uint8_t)((fg * a + bg * (15 - a) + 7) / 15);
-        dst->drawPixel(gx0 + gx, gy0 + gy, c);
+        if (fast) pix4::put(acc, gx0 + gx, gy0 + gy, c);
+        else dst->drawPixel(gx0 + gx, gy0 + gy, c);
       }
     }
     pen += g->adv;
