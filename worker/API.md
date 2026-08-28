@@ -80,7 +80,7 @@ Cloudflare Worker 反向代理 [splatoon3.ink](https://splatoon3.ink) 的公开�
 
 - 时段判定：`active = start<=now<end`，`upcoming = start>now`（顺序保持）。
 - 蛮颓拆分按 `bankaraMatchSettings[].bankaraMode`；祭典按 `festMatchSettings[].festMode`。
-- 祭典期间站点首页用祭典框替换常规框——compact 两种都下发，由设备决定展示替换。
+- 祭典期间站点首页用祭典框替换常规框；compact 两种都下发，由设备决定展示替换。
 - 活动比赛整体窗口 = `timePeriods` min/max；完全过去的活动被丢弃。
 - 打工 = `regularSchedules + bigRunSchedules` 合并按 `startTime` 排序；
   `teamContestSchedules` 独立为 eggstra。

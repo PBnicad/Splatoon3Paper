@@ -36,7 +36,7 @@ curl -sI https://api.splatoon.icu/data/schedules.json           # 透传 + X-Cac
 `http://127.0.0.1:8787/api/v1/compact`。
 
 安全说明：Worker 仅向固定白名单主机 `https://splatoon3.ink` 的 `/data/` 路径发起
-https 请求，并显式拒绝 localhost/环回/私网/保留地址——不存在被当作开放代理或内网
+https 请求，并显式拒绝 localhost/环回/私网/保留地址，不存在被当作开放代理或内网
 探测器的面（见 `worker/src/upstream.js`）。
 
 ## 2. 设备
@@ -57,7 +57,7 @@ https 请求，并显式拒绝 localhost/环回/私网/保留地址——不存�
    > wifi 你的SSID 你的密码
    ```
 
-4. 重启后自动：连 WiFi → NTP 授时（写入 RTC）→ 拉取 compact → 渲染总览页。
+4. 重启后自动：连 WiFi → NTP 授时（写入 RTC）→ 拉取 compact → 渲染涂地页。
 
 ## 3. 日常维护
 

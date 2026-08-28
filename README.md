@@ -15,8 +15,8 @@ M5Paper ──HTTPS──> Cloudflare Worker (api.splatoon.icu) ──HTTPS─�
                         └─ /data/*           纯透传反代 + 边缘缓存 + 故障影子缓存
 ```
 
-- **数据**：splatoon3.ink 公开数据（[Data Access wiki](https://github.com/misenhower/splatoon3.ink/wiki/Data-Access)）。
-  注意数据**不在 GitHub 仓库里**（仓库无 data/ 目录），上游实际是 splatoon3.ink 自身的 S3+Cloudflare，
+- **数据**：splatoon3.ink 公开数据（[Data Access wiki](https://github.com/misenhower/splatoon3.ink/wiki/Data-Access)），
+  上游是 splatoon3.ink 自身的 S3+Cloudflare（GitHub 仓库无 data/ 目录），
   因此 Worker 直接代理 splatoon3.ink。
 - **逻辑**：按 misenhower/splatoon3.ink（MIT）前端 store 逻辑在 Worker 端复刻
   （当前/未来时段判定、蛮颓系列/开放拆分、活动 timePeriods 聚合、打工合并排序、
@@ -39,7 +39,7 @@ M5Paper ──HTTPS──> Cloudflare Worker (api.splatoon.icu) ──HTTPS─�
 | 设置 | Wi-Fi 配网、关于（含二维码）、手动刷新 |
 
 其他交互：点头部右上角图标区进 Wi-Fi 设置；转轮键双击息屏（触摸唤醒）。
-每分钟局部刷新头部（时钟）；每 10 次快速刷新自动做一次全刷去残影。
+每分钟局部刷新头部（时钟）；快速刷新累计满 10 次自动做一次全刷去残影。
 
 ## 目录结构
 
@@ -102,8 +102,7 @@ pio run -t uploadfs
 
 ## 部署
 
-见 `docs/deploy.md`（需要拥有 splatoon.icu 并托管在 Cloudflare，Worker 绑定自定义域
-`api.splatoon.icu`；workers.dev 默认域在国内基本不可达）。
+见 `docs/deploy.md`。
 
 ## 取数礼仪 / 署名
 
