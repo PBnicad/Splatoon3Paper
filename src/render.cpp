@@ -182,6 +182,12 @@ bool festBattleActive(const Model& m) {
   return !m.fest.state[0] && m.fest.st && m.fest.et && now >= m.fest.st && now < m.fest.et;
 }
 
+// The fest tab only shows when the page has something to display; a bare
+// "暂无" page is not worth a footer slot during the months between fests.
+static bool festTabVisible(const Model& m) {
+  return m.fest.present || m.festNext.present || m.nFestRecent > 0;
+}
+
 static int fillTabs(const Model& m, int* ids, const char** labels, int cap) {
   int n = 0;
   auto push = [&](int id, const char* lab) {
@@ -196,6 +202,7 @@ static int fillTabs(const Model& m, int* ids, const char** labels, int cap) {
     push(kPageRegular, ui::NavRegular);
     push(kPageAnarchy, ui::NavAnarchy);
     push(kPageX, ui::NavX);
+    if (festTabVisible(m)) push(kPageFest, ui::NavFest);  // hidden without fest data
   }
   if (m.nEvents > 0) push(kPageEvents, ui::NavEvents);
   push(kPageSalmon, ui::NavSalmon);
@@ -265,7 +272,7 @@ static int drawSlotList(const ModeSlots* mm, int y, int maxRows, int imgH) {
     fmtRange(s.st, s.et, range, sizeof(range));
     uint8_t bg = nowRow ? C_LIGHT : C_WHITE;
     if (nowRow) page.fillRoundRect(12, y, kW - 24, cardH - 4, 4, C_LIGHT);
-    const int inset = nowRow ? 16 : 0;
+    const int inset = nowRow ? 6 : 0;  // ≤6 keeps two native-width maps inside the highlight
     const int left = 12 + inset;
     const int right = kW - 12 - inset;
     int mw = kMapW;
@@ -324,32 +331,15 @@ static void drawBattlePage(const Model& m, const char* title, const char* label,
   drawFooter(m, pageId);
 }
 
-static void pickSplitGeom(int listY, int* imgH, int* nPer) {
-  int img = kMapHNative;
-  int n = fitSlots(listY, img, kSecH) / 2;
-  if (n < 2) {
-    int avail = kH - kFooterH - listY - kSecH;
-    int h = avail / 4;
-    img = h - (8 + kInk24 + 10 + 8 + kInk24 + 10);
-    if (img < 72) img = 72;
-    if (img > kMapHNative) img = kMapHNative;
-    n = 2;
-    if (fitSlots(listY, img, kSecH) / 2 < 2) n = 1;
-  }
-  *imgH = img;
-  *nPer = n < 1 ? 1 : n;
-}
-
 static void drawAnarchyPage(const Model& m) {
+  // Only the current slot per mode — plenty of room, so maps render at
+  // native 248×124 (imgDrawFit is then a straight 1:1 blit, no cover-crop).
   drawPageTitle(ui::AnarchyTitle);
   int y = kContentY;
   font24.draw(&page, 24, y, ui::ModeSeries, C_GRAY, C_WHITE);
-  int listY = y + kSecH;
-  int imgH, nPer;
-  pickSplitGeom(listY, &imgH, &nPer);
-  y = drawSlotList(m.findMode(ui::ModeSeries), listY, nPer, imgH);
+  y = drawSlotList(m.findMode(ui::ModeSeries), y + kSecH, 1, kMapHNative);
   font24.draw(&page, 24, y, ui::ModeOpen, C_GRAY, C_WHITE);
-  drawSlotList(m.findMode(ui::ModeOpen), y + kSecH, nPer, imgH);
+  drawSlotList(m.findMode(ui::ModeOpen), y + kSecH, 1, kMapHNative);
   drawFooter(m, kPageAnarchy);
 }
 
@@ -357,17 +347,66 @@ static void drawFestPage(const Model& m) {
   drawPageTitle(ui::FestTitle);
   int y = kContentY;
   if (m.fest.present) {
-    font24.drawEllipsis(&page, 24, y, m.fest.title, C_DARK, C_WHITE, kW - 48);
-    y += kInk24 + 8;
-    y = drawFestTeams(y, m.fest.teams, m.fest.nTeams) + 10;
+    const FestInfo& f = m.fest;
+    font24.drawEllipsis(&page, 24, y, f.title, C_DARK, C_WHITE, kW - 48);
+    y += kLine24;
+    char range[48], line[128];
+    fmtRange(f.st, f.et, range, sizeof(range));
+    bool active = !strcmp(f.state, "FIRST_HALF") || !strcmp(f.state, "SECOND_HALF");
+    if (active) {
+      const char* phase = !strcmp(f.state, "SECOND_HALF") ? ui::Pro : ui::Open;
+      if (f.mt) {
+        char mt[24];
+        fmtHM(f.mt, mt, sizeof(mt));
+        snprintf(line, sizeof(line), "%s · %s %s · %s", phase, ui::Midterm, mt, range);
+      } else {
+        snprintf(line, sizeof(line), "%s · %s", phase, range);
+      }
+      font24.drawEllipsis(&page, 24, y, line, C_GRAY, C_WHITE, kW - 48);
+    } else {
+      font24.draw(&page, 24, y, range, C_GRAY, C_WHITE);
+    }
+    y += kLine24;
+    y = drawFestTeams(y, f.teams, f.nTeams);
+    if (!festBattleActive(m) && f.nTri > 0) {
+      char tri[96];
+      snprintf(tri, sizeof(tri), "%s: %s", ui::Tricolor, f.tri[0]);
+      font24.drawEllipsis(&page, 24, y, tri, C_GRAY, C_WHITE, kW - 60);
+      y += kLine24;
+    }
+    y += 8;
+    if (festBattleActive(m)) {
+      font24.draw(&page, 24, y, ui::ModeFestOpen, C_GRAY, C_WHITE);
+      y = drawSlotList(m.findMode(ui::ModeFestOpen), y + kSecH, 1, kMapHNative);
+      font24.draw(&page, 24, y, ui::ModeFestPro, C_GRAY, C_WHITE);
+      y = drawSlotList(m.findMode(ui::ModeFestPro), y + kSecH, 1, kMapHNative);
+    }
+  } else if (m.festNext.present) {
+    const FestHist& f = m.festNext;
+    drawText(24, y, "下次祭典", C_GRAY, C_WHITE);
+    y += kLine24;
+    font24.drawEllipsis(&page, 24, y, f.title, C_BLACK, C_WHITE, kW - 48);
+    y += kLine24;
+    char range[48];
+    fmtRange(f.st, f.et, range, sizeof(range));
+    font24.draw(&page, 24, y, range, C_MID, C_WHITE);
+    y += kLine24;
+    y = drawFestTeams(y, f.teams, f.nTeams) + 8;
+  } else {
+    drawText(24, y, "祭典 · 暂无", C_MID, C_WHITE);
+    y += kInk24 + 10;
   }
-  font24.draw(&page, 24, y, ui::ModeFestOpen, C_GRAY, C_WHITE);
-  int listY = y + kSecH;
-  int imgH, nPer;
-  pickSplitGeom(listY, &imgH, &nPer);
-  y = drawSlotList(m.findMode(ui::ModeFestOpen), listY, nPer, imgH);
-  font24.draw(&page, 24, y, ui::ModeFestPro, C_GRAY, C_WHITE);
-  drawSlotList(m.findMode(ui::ModeFestPro), y + kSecH, nPer, imgH);
+  for (int i = 0; i < m.nFestRecent; ++i) {
+    // separator + heading + teams (two lines when vote rates are present)
+    if (y + 12 + 10 + kLine24 + kInk24 + kLine24 + 8 > kH - kFooterH) break;
+    y += 12;
+    page.drawFastHLine(12, y, kW - 24, C_LIGHT);
+    y += 10;
+    char head[128];
+    snprintf(head, sizeof(head), "%s %s %s", ui::FestTitle, ui::Results, m.festRecent[i].title);
+    font24.drawEllipsis(&page, 24, y, head, C_DARK, C_WHITE, kW - 60);
+    y = drawFestTeams(y + kLine24, m.festRecent[i].teams, m.festRecent[i].nTeams) + 8;
+  }
   drawFooter(m, kPageFest);
 }
 
@@ -550,7 +589,7 @@ static void drawP3(const Model& m) {
   drawFooter(m, kPageSalmon);
 }
 
-// ---------------------------------------------------- page 4 events & fest --
+// ------------------------------------------------------------ page 4 events --
 
 static int drawFestTeams(int y, const Team* teams, int n) {
   if (n <= 0) return y;
@@ -583,30 +622,26 @@ static int drawFestTeams(int y, const Team* teams, int n) {
 }
 
 static void drawP4(const Model& m) {
-  char title[48];
-  snprintf(title, sizeof(title), "%s / %s", ui::EventsTitle, ui::FestTitle);
-  drawPageTitle(title);
+  drawPageTitle(ui::EventsTitle);
 
   int y = kContentY;
-  int eventH = 8 + kInk24 + 10 + kMapHNative + 8 + kInk24 + 10 + kInk24 + 8;
-  int room = kH - kFooterH - 200 - y;
-  int ne = room / eventH;
-  if (ne > m.nEvents) ne = m.nEvents;
-  if (ne > 2) ne = 2;
-  if (ne < 0) ne = 0;
   if (m.nEvents == 0) {
     drawText(24, y, ui::None, C_MID, C_WHITE);
-    y += kInk24 + 10;
+    drawFooter(m, kPageEvents);
+    return;
   }
-  for (int i = 0; i < ne; ++i) {
+
+  // Full cards with native-height maps while they fit; the rest as one-line
+  // entries so nothing is silently dropped.
+  constexpr int eventH = 8 + kInk24 + 10 + kMapHNative + 8 + kInk24 + 10 + kInk24 + 8;
+  int i = 0;
+  for (; i < m.nEvents && y + eventH <= kH - kFooterH; ++i) {
     const EventItem& e = m.events[i];
     font24.drawEllipsis(&page, 24, y, e.n, C_BLACK, C_WHITE, 360);
-    char a[24], b[24], meta[48];
-    fmtHM(e.st, a, sizeof(a));
-    fmtHM(e.et, b, sizeof(b));
-    snprintf(meta, sizeof(meta), "%s~%s", a, b);
-    int mw = font24.textWidth(meta);
-    font24.draw(&page, kW - 24 - mw, y, meta, C_MID, C_WHITE);
+    char range[48];
+    fmtRange(e.st, e.et, range, sizeof(range));
+    int rw = font24.textWidth(range);
+    font24.draw(&page, kW - 24 - rw, y, range, C_MID, C_WHITE);
     int iy = y + kInk24 + 10;
     drawImgOrBox(12, iy, kMapW, kMapHNative, e.si1);
     drawImgOrBox(12 + kMapW + kMapGap, iy, kMapW, kMapHNative, e.si2);
@@ -617,60 +652,14 @@ static void drawP4(const Model& m) {
     font24.drawEllipsis(&page, 24, dy, e.d, C_GRAY, C_WHITE, kW - 48);
     y = dy + kInk24 + 12;
   }
-
-  page.drawFastHLine(12, y, kW - 24, C_LIGHT);
-  y += 12;
-  if (m.fest.present) {
-    const FestInfo& f = m.fest;
-    font24.drawEllipsis(&page, 24, y, f.title, C_BLACK, C_WHITE, kW - 48);
+  for (; i < m.nEvents && y + kInk24 <= kH - kFooterH; ++i) {
+    const EventItem& e = m.events[i];
+    char range[48];
+    fmtRange(e.st, e.et, range, sizeof(range));
+    int rw = font24.textWidth(range);
+    font24.drawEllipsis(&page, 24, y, e.n, C_DARK, C_WHITE, kW - 48 - rw - 16);
+    font24.draw(&page, kW - 24 - rw, y, range, C_MID, C_WHITE);
     y += kLine24;
-    char tbuf[96], a[24], b[24];
-    fmtHM(f.st, a, sizeof(a));
-    fmtHM(f.et, b, sizeof(b));
-    const char* phase = !strcmp(f.state, "SECOND_HALF") ? ui::Pro : ui::Open;
-    snprintf(tbuf, sizeof(tbuf), "%s · %s ~ %s", phase, a, b);
-    font24.draw(&page, 24, y, tbuf, C_GRAY, C_WHITE);
-    y += kLine24;
-    if (f.mt) {
-      char mt[24];
-      fmtHM(f.mt, mt, sizeof(mt));
-      snprintf(tbuf, sizeof(tbuf), "%s %s", ui::Midterm, mt);
-      font24.draw(&page, 24, y, tbuf, C_MID, C_WHITE);
-      y += kLine24;
-    }
-    y = drawFestTeams(y, f.teams, f.nTeams) + 8;
-    if (f.nTri > 0) {
-      char tri[96];
-      snprintf(tri, sizeof(tri), "%s: %s", ui::Tricolor, f.tri[0]);
-      font24.drawEllipsis(&page, 24, y, tri, C_GRAY, C_WHITE, kW - 60);
-      y += kLine24;
-    }
-  } else if (m.festNext.present) {
-    const FestHist& f = m.festNext;
-    drawText(24, y, "下次祭典", C_GRAY, C_WHITE);
-    y += kLine24;
-    font24.drawEllipsis(&page, 24, y, f.title, C_BLACK, C_WHITE, kW - 48);
-    y += kLine24;
-    char tbuf[96], a[24], b[24];
-    fmtHM(f.st, a, sizeof(a));
-    fmtHM(f.et, b, sizeof(b));
-    snprintf(tbuf, sizeof(tbuf), "%s ~ %s", a, b);
-    font24.draw(&page, 24, y, tbuf, C_MID, C_WHITE);
-    y += kLine24;
-    y = drawFestTeams(y, f.teams, f.nTeams);
-  } else {
-    drawText(24, y, "祭典 · 暂无", C_MID, C_WHITE);
-  }
-
-  if (m.nFestRecent > 0 && y + 40 + kInk24 + kLine24 <= kH - kFooterH) {
-    const FestHist& f = m.festRecent[0];
-    y += 12;
-    page.drawFastHLine(12, y, kW - 24, C_LIGHT);
-    y += 10;
-    char tbuf[128];
-    snprintf(tbuf, sizeof(tbuf), "%s %s %s", ui::FestTitle, ui::Results, f.title);
-    font24.drawEllipsis(&page, 24, y, tbuf, C_DARK, C_WHITE, kW - 60);
-    drawFestTeams(y + kLine24, f.teams, f.nTeams);
   }
   drawFooter(m, kPageEvents);
 }

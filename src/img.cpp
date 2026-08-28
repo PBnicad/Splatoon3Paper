@@ -255,15 +255,15 @@ void imgQueuePage(const Model& m, int page) {
       addModeVisible(m.findMode(ui::ModeRegular), 3);
       break;
     case render::kPageAnarchy:
-      addModeVisible(m.findMode(ui::ModeSeries), 2);
-      addModeVisible(m.findMode(ui::ModeOpen), 2);
+      addModeVisible(m.findMode(ui::ModeSeries), 1);
+      addModeVisible(m.findMode(ui::ModeOpen), 1);
       break;
     case render::kPageX:
       addModeVisible(m.findMode(ui::ModeX), 3);
       break;
     case render::kPageFest:
-      addModeVisible(m.findMode(ui::ModeFestOpen), 2);
-      addModeVisible(m.findMode(ui::ModeFestPro), 2);
+      addModeVisible(m.findMode(ui::ModeFestOpen), 1);
+      addModeVisible(m.findMode(ui::ModeFestPro), 1);
       break;
     case render::kPageEvents:
       for (int i = 0; i < m.nEvents && i < 2; i++) {
